@@ -10,8 +10,22 @@ Usage:
 import argparse, json, shutil, subprocess, sys, tempfile
 from pathlib import Path
 
-import numpy as np
-from PIL import Image, ImageDraw, ImageFilter
+# No pip packages needed: only Python 3 and ffmpeg/ffprobe.
+# ffmpeg is taken from PATH, or from a bin/ folder next to this script.
+HERE = Path(__file__).resolve().parent
+
+
+def tool(name):
+    local = HERE / "bin" / name
+    if local.exists():
+        return str(local)
+    found = shutil.which(name)
+    if not found:
+        sys.exit(f"{name} not found. Put the {name} file in the bin/ folder (see README), or: brew install ffmpeg")
+    return found
+
+
+FFMPEG, FFPROBE = None, None
 
 VIDEO_EXT = {".mov", ".mp4", ".m4v"}
 
@@ -24,7 +38,7 @@ def run(cmd):
 
 
 def probe(path):
-    out = run(["ffprobe", "-v", "error", "-show_streams", "-show_format", "-of", "json", str(path)])
+    out = run([FFPROBE, "-v", "error", "-show_streams", "-show_format", "-of", "json", str(path)])
     info = json.loads(out)
     v = next(s for s in info["streams"] if s["codec_type"] == "video")
     num, den = v.get("avg_frame_rate", "30/1").split("/")
@@ -41,43 +55,75 @@ def probe(path):
     return w, h, fps, float(info["format"]["duration"]), has_audio
 
 
+def run_bytes(cmd):
+    r = subprocess.run(cmd, capture_output=True)
+    if r.returncode != 0:
+        sys.exit(f"Command failed:\n{' '.join(map(str, cmd))}\n{r.stderr.decode(errors='ignore')[-2000:]}")
+    return r.stdout
+
+
 def analyse_bezel(bezel_path, workdir):
     """Find the transparent screen area inside the bezel and build a matching mask."""
-    img = Image.open(bezel_path).convert("RGBA")
-    a = np.array(img)[:, :, 3]
-    # 255 = transparent (screen or outside), 0 = solid phone body
-    tr = Image.fromarray(np.where(a < 128, 255, 0).astype(np.uint8), "L").copy()  # copy: floodfill is a no-op on array-backed images
-    W, H = tr.size
-    seed = (W // 2, H // 2)
-    if tr.getpixel(seed) != 255:
-        sys.exit("Couldn't find the screen: the centre of the bezel isn't transparent. Is this a bezel PNG with a see-through screen?")
-    ImageDraw.floodfill(tr, seed, 128)
-    screen = np.array(tr) == 128
-    if screen[0, :].any() or screen[:, 0].any():
-        sys.exit("The screen area leaks to the edge of the image. Use a bezel PNG with a closed screen opening.")
-    ys, xs = np.where(screen)
-    x0, x1, y0, y1 = xs.min(), xs.max() + 1, ys.min(), ys.max() + 1
-    # Grow the mask a few px so the video tucks under the anti-aliased bezel edge (no gaps)
-    m = Image.fromarray((screen * 255).astype(np.uint8), "L").filter(ImageFilter.MaxFilter(7))
+    info = json.loads(run([FFPROBE, "-v", "error", "-show_streams", "-of", "json", str(bezel_path)]))
+    W, H = int(info["streams"][0]["width"]), int(info["streams"][0]["height"])
+    alpha = run_bytes([FFMPEG, "-v", "error", "-i", str(bezel_path), "-vf", "format=rgba,alphaextract",
+                       "-f", "rawvideo", "-pix_fmt", "gray", "-"])
+    if len(alpha) < W * H:
+        sys.exit("Couldn't read the bezel's transparency. Is it a PNG with a see-through screen?")
+    # '.' = see-through, '#' = solid phone
+    table = bytes(46 if i < 128 else 35 for i in range(256))
+    cx = W // 2
+    rows = [alpha[y * W:(y + 1) * W].translate(table) for y in range(H)]
+    centre_open = [y for y in range(H) if rows[y][cx] == 46 and b"#" in rows[y][:cx] and b"#" in rows[y][cx:]]
+    if not centre_open:
+        sys.exit("Couldn't find the screen: the centre of the bezel isn't see-through.")
+    top, bottom = centre_open[0], centre_open[-1]
+    spans = {}
+    for y in range(top, bottom + 1):
+        r = rows[y]
+        if r[cx] == 46:  # normal row: grow out from the centre to the phone's edges
+            l = r.rfind(b"#", 0, cx) + 1
+            rr = r.find(b"#", cx)
+        else:  # row through the Dynamic Island: step past it, then out to the edges
+            lo = r.rfind(b".", 0, cx)
+            ro = r.find(b".", cx)
+            if lo < 0 or ro < 0:
+                continue
+            l = r.rfind(b"#", 0, lo) + 1
+            rr = r.find(b"#", ro)
+        if l > 0 and rr > l:
+            spans[y] = (l, rr)
+    x0 = min(v[0] for v in spans.values()); x1 = max(v[1] for v in spans.values())
     pad = 3
-    x0, y0 = max(0, x0 - pad), max(0, y0 - pad)
-    x1, y1 = min(W, x1 + pad), min(H, y1 + pad)
-    # ffmpeg wants even sizes for some codecs
+    x0, y0 = max(0, x0 - pad), max(0, top - pad)
+    x1, y1 = min(W, x1 + pad), min(H, bottom + 1 + pad)
     if (x1 - x0) % 2: x1 -= 1
     if (y1 - y0) % 2: y1 -= 1
+    mw, mh = x1 - x0, y1 - y0
+    buf = bytearray(mw * mh)
+    for y, (l, rr) in spans.items():
+        yy = y - y0
+        if 0 <= yy < mh:
+            a, b = max(0, l - x0), min(mw, rr - x0)
+            buf[yy * mw + a: yy * mw + b] = b"\xff" * (b - a)
+    raw = Path(workdir) / "mask_raw.pgm"
+    raw.write_bytes(f"P5 {mw} {mh} 255\n".encode() + bytes(buf))
+    # Grow the mask a few px so the video tucks under the bezel's soft edge (no gaps)
     mask_path = Path(workdir) / "mask.png"
-    m.crop((x0, y0, x1, y1)).save(mask_path)
-    return dict(W=W, H=H, x=int(x0), y=int(y0), w=int(x1 - x0), h=int(y1 - y0), mask=mask_path)
+    run([FFMPEG, "-y", "-v", "error", "-i", str(raw), "-vf", "dilation,dilation,dilation", str(mask_path)])
+    return dict(W=W, H=H, x=int(x0), y=int(y0), w=int(mw), h=int(mh), mask=mask_path)
 
 
 def statusbar_colour(video, sb_h, workdir, at=0.5):
     """Sample the app colour just under the status bar so the cover blends in."""
-    frame = Path(workdir) / "first.png"
-    run(["ffmpeg", "-y", "-v", "error", "-ss", str(at), "-i", str(video), "-frames:v", "1", str(frame)])
-    arr = np.array(Image.open(frame).convert("RGB"))
-    row = arr[min(arr.shape[0] - 1, sb_h + 6), :, :]
-    r, g, b = np.median(row, axis=0).astype(int)
-    return f"0x{r:02x}{g:02x}{b:02x}"
+    w = probe(video)[0]
+    row = run_bytes([FFMPEG, "-v", "error", "-ss", str(at), "-i", str(video), "-frames:v", "1",
+                     "-vf", f"crop=w=iw:h=2:x=0:y={sb_h + 6}", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"])
+    row = row[: w * 3]  # first of the two rows (yuv needs an even crop height)
+    px = [row[i:i + 3] for i in range(0, len(row) - 2, 3)]
+    def med(c):
+        v = sorted(p[c] for p in px); return v[len(v) // 2]
+    return f"0x{med(0):02x}{med(1):02x}{med(2):02x}"
 
 
 def process(video, args, bez, outdir, workdir):
@@ -116,7 +162,7 @@ def process(video, args, bez, outdir, workdir):
     ext = {"prores": ".mov", "hevc": ".mov", "webm": ".webm", "png": ".png"}[fmt]
     out = outdir / f"{video.stem}_framed{ext}"
 
-    cmd = ["ffmpeg", "-y", "-v", "error", "-ss", f"{start}", "-t", f"{length}", "-i", str(video),
+    cmd = [FFMPEG, "-y", "-v", "error", "-ss", f"{start}", "-t", f"{length}", "-i", str(video),
            "-loop", "1", "-i", str(args.bezel), "-loop", "1", "-i", str(bez["mask"]),
            "-filter_complex", graph, "-map", "[out]"]
     if fmt == "png":
@@ -158,9 +204,8 @@ def main():
     p.add_argument("--move-done", action="store_true", help="move processed inputs into a 'done' folder")
     args = p.parse_args()
 
-    for tool in ("ffmpeg", "ffprobe"):
-        if not shutil.which(tool):
-            sys.exit(f"{tool} not found. On a Mac: brew install ffmpeg")
+    global FFMPEG, FFPROBE
+    FFMPEG, FFPROBE = tool("ffmpeg"), tool("ffprobe")
 
     src = Path(args.input)
     videos = sorted(f for f in src.iterdir() if f.suffix.lower() in VIDEO_EXT) if src.is_dir() else [src]

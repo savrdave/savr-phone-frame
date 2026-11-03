@@ -4,14 +4,16 @@ Turns an iPhone screen recording into a video of a real iPhone with the recordin
 
 Drop it straight into CapCut or Descript on top of any background, b-roll or headline card.
 
-## One-time setup (Mac, about 10 min)
+## One-time setup (Mac, about 10 min, works offline)
 
-1. Install the tools. In Terminal:
-   ```
-   brew install ffmpeg python
-   pip3 install -r requirements.txt
-   ```
-2. Get the phone frame. Go to https://developer.apple.com/design/resources/, find **Product Bezels**, download the newest iPhone, and put the portrait PNG (the one with the transparent screen) in `bezels/`.
+You need Python 3 (already on your Mac if you've used Xcode; check with `python3 --version`) and ffmpeg. No other installs.
+
+**ffmpeg, offline:** download the Apple Silicon `ffmpeg` and `ffprobe` zips from https://www.osxexperts.net, unzip them, and put both files in `bin/`. Then run the two commands in `bin/README.md`.
+**ffmpeg, online:** `brew install ffmpeg` works too.
+
+**Phone frame:** go to https://developer.apple.com/design/resources/, find **Product Bezels**, download the newest iPhone, and put the portrait PNG (the one with the see-through screen) in `bezels/`.
+
+Make the script runnable once: `chmod +x frame.sh`
 
 ## Every time
 
