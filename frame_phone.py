@@ -288,7 +288,7 @@ def process(video, args, bez, outdir, workdir):
             cmd += ["-c:v", "prores_ks", "-profile:v", "4444", "-pix_fmt", "yuva444p10le", "-alpha_bits", "16"]
             if args.audio: cmd += ["-c:a", "pcm_s16le"]
         elif fmt == "hevc":  # Mac only: small files, transparent, plays natively on iPhone
-            cmd += ["-c:v", "hevc_videotoolbox", "-alpha_quality", "0.75", "-tag:v", "hvc1", "-b:v", "12M"]
+            cmd += ["-c:v", "hevc_videotoolbox", "-pix_fmt", "bgra", "-alpha_quality", "0.75", "-tag:v", "hvc1", "-b:v", "12M"]
             if args.audio: cmd += ["-c:a", "aac"]
         elif fmt == "webm":
             cmd += ["-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-b:v", "0", "-crf", "28", "-row-mt", "1"]
