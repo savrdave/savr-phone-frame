@@ -126,6 +126,105 @@ def statusbar_colour(video, sb_h, workdir, at=0.5):
     return f"0x{med(0):02x}{med(1):02x}{med(2):02x}"
 
 
+# ---------- fake iOS status bar (time, signal, 5G, battery) ----------
+import struct, zlib
+
+FONT_CANDIDATES = [
+    "/System/Library/Fonts/SFNS.ttf",                 # San Francisco (macOS)
+    "/System/Library/Fonts/SFNSDisplay.ttf",
+    "/System/Library/Fonts/Helvetica.ttc",
+    "/usr/share/fonts/opentype/inter/Inter-SemiBold.otf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+]
+
+
+def find_font(override=None):
+    for f in ([override] if override else []) + FONT_CANDIDATES:
+        if f and Path(f).exists():
+            return f
+    sys.exit("No font found for the status bar. Pass one with --font /path/to/font.ttf")
+
+
+def write_png(path, w, h, rgba):
+    raw = b"".join(b"\x00" + bytes(rgba[y * w * 4:(y + 1) * w * 4]) for y in range(h))
+    def chunk(t, d):
+        c = struct.pack(">I", len(d)) + t + d
+        return c + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+    Path(path).write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0))
+                           + chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b""))
+
+
+def _rrect_cov(px, py, x0, y0, x1, y1, r, ss=4):
+    """Coverage (0..1) of pixel (px,py) by a rounded rectangle, supersampled."""
+    hit = 0
+    for i in range(ss):
+        for j in range(ss):
+            x = px + (i + 0.5) / ss; y = py + (j + 0.5) / ss
+            if x < x0 or x > x1 or y < y0 or y > y1:
+                continue
+            cx = min(max(x, x0 + r), x1 - r); cy = min(max(y, y0 + r), y1 - r)
+            if (x - cx) ** 2 + (y - cy) ** 2 <= r * r:
+                hit += 1
+    return hit / (ss * ss)
+
+
+def _paint(buf, W, H, rgb, alpha, x0, y0, x1, y1, r, hole=None):
+    for py in range(max(0, int(y0)), min(H, int(y1) + 2)):
+        for px in range(max(0, int(x0)), min(W, int(x1) + 2)):
+            c = _rrect_cov(px, py, x0, y0, x1, y1, r)
+            if hole:
+                c = max(0.0, c - _rrect_cov(px, py, *hole))
+            if c <= 0:
+                continue
+            a_new = c * alpha
+            i = (py * W + px) * 4
+            a_old = buf[i + 3] / 255
+            a_out = a_new + a_old * (1 - a_new)
+            for k in range(3):
+                buf[i + k] = int(round((rgb[k] * a_new + buf[i + k] * a_old * (1 - a_new)) / a_out)) if a_out else 0
+            buf[i + 3] = int(round(a_out * 255))
+
+
+def make_status_bar(path, W, H, bg_hex, args, workdir):
+    """iPhone-style status bar sized to the recording. Layout in iOS points, scaled to pixels."""
+    s = W / 393.0                                   # 393pt wide = iPhone 15/16/17 Pro
+    r, g, b = int(bg_hex[2:4], 16), int(bg_hex[4:6], 16), int(bg_hex[6:8], 16)
+    light_bg = (0.299 * r + 0.587 * g + 0.114 * b) > 150
+    fg = (0, 0, 0) if light_bg else (255, 255, 255)
+    buf = bytearray([r, g, b, 255] * (W * H))       # solid background = hides the red dot
+    mid = H / 2 + 2 * s                             # icon centre line
+    # signal bars (4)
+    bw, gap = 3 * s, 1.6 * s
+    label_w = 8.6 * len(args.network)               # rough width of the network label in points
+    x = (335 - label_w - 4) * s - (4 * bw + 3 * gap)  # signal bars sit just left of the label
+    for i, bh in enumerate((4.5, 6.5, 9, 11.5)):
+        bx = x + i * (bw + gap)
+        _paint(buf, W, H, fg, 1.0, bx, mid + 5.75 * s - bh * s, bx + bw, mid + 5.75 * s, 0.9 * s)
+    # battery: outline, level fill, nub
+    bx0, by0 = 340 * s, mid - 6.5 * s
+    bx1, by1 = bx0 + 25 * s, by0 + 13 * s
+    sw = 1.05 * s
+    _paint(buf, W, H, fg, 0.4, bx0, by0, bx1, by1, 4.2 * s,
+           hole=(bx0 + sw, by0 + sw, bx1 - sw, by1 - sw, 3.2 * s))
+    level = max(0.05, min(1.0, args.battery / 100))
+    inner = 2.1 * s
+    _paint(buf, W, H, fg, 1.0, bx0 + inner, by0 + inner,
+           bx0 + inner + (bx1 - bx0 - 2 * inner) * level, by1 - inner, 2.4 * s)
+    _paint(buf, W, H, fg, 0.4, bx1 + 1.2 * s, mid - 2.2 * s, bx1 + 2.6 * s, mid + 2.2 * s, 0.7 * s)
+    base = Path(workdir) / "sb_base.png"
+    write_png(base, W, H, buf)
+    # text: time on the left, network label before the battery
+    font = find_font(args.font).replace(":", "\\:")
+    col = "black" if light_bg else "white"
+    t = args.time.replace(":", "\\:")
+    tsize = int(round(17 * s)); nsize = int(round(13.5 * s))
+    vf = (f"drawtext=fontfile='{font}':text='{t}':fontsize={tsize}:fontcolor={col}:"
+          f"x={int(66 * s)}-text_w/2:y={mid:.0f}-text_h/2,"
+          f"drawtext=fontfile='{font}':text='{args.network}':fontsize={nsize}:fontcolor={col}:"
+          f"x={int(335 * s)}-text_w:y={mid:.0f}-text_h/2")
+    run([FFMPEG, "-y", "-v", "error", "-i", str(base), "-vf", vf, "-pix_fmt", "rgba", str(path)])
+
+
 def process(video, args, bez, outdir, workdir):
     vw, vh, fps, dur, has_audio = probe(video)
     start = args.trim_start
@@ -136,17 +235,29 @@ def process(video, args, bez, outdir, workdir):
     length = end - start
 
     filters = []
+    sb_png = None
     if args.statusbar != "none":
         sb_h = int(round(vh * args.statusbar_pct / 100))
         colour = args.statusbar_colour or statusbar_colour(video, sb_h, workdir, at=start + 0.2)
-        cover_w = "iw" if args.statusbar == "cover" else "iw*0.38"
-        filters.append(f"drawbox=x=0:y=0:w={cover_w}:h={sb_h}:color={colour}:t=fill")
+        if args.statusbar == "fake":
+            sb_png = Path(workdir) / f"statusbar_{vw}x{sb_h}.png"
+            make_status_bar(sb_png, vw, sb_h, colour, args, workdir)
+        else:
+            cover_w = "iw" if args.statusbar == "cover" else "iw*0.38"
+            filters.append(f"drawbox=x=0:y=0:w={cover_w}:h={sb_h}:color={colour}:t=fill")
     filters.append(f"scale={bez['w']}:{bez['h']}:force_original_aspect_ratio=increase:flags=lanczos")
     filters.append(f"crop={bez['w']}:{bez['h']}")
     filters.append("format=rgba")
 
+    pre = ""
+    if sb_png:
+        pre = "[0:v][3:v]overlay=0:0:format=auto[sbv];"
+        src = "[sbv]"
+    else:
+        src = "[0:v]"
     graph = (
-        f"[0:v]{','.join(filters)}[scr];"
+        pre +
+        f"{src}{','.join(filters)}[scr];"
         f"[2:v]format=gray,scale={bez['w']}:{bez['h']}[msk];"
         f"[scr][msk]alphamerge[scra];"
         f"color=c=black@0.0:s={bez['W']}x{bez['H']}:r={fps:.3f},format=rgba[bg];"
@@ -163,8 +274,10 @@ def process(video, args, bez, outdir, workdir):
     out = outdir / f"{video.stem}_framed{ext}"
 
     cmd = [FFMPEG, "-y", "-v", "error", "-ss", f"{start}", "-t", f"{length}", "-i", str(video),
-           "-loop", "1", "-i", str(args.bezel), "-loop", "1", "-i", str(bez["mask"]),
-           "-filter_complex", graph, "-map", "[out]"]
+           "-loop", "1", "-i", str(args.bezel), "-loop", "1", "-i", str(bez["mask"])]
+    if sb_png:
+        cmd += ["-loop", "1", "-i", str(sb_png)]
+    cmd += ["-filter_complex", graph, "-map", "[out]"]
     if fmt == "png":
         cmd += ["-frames:v", "1"]
     else:
@@ -193,8 +306,13 @@ def main():
     p.add_argument("--format", choices=["prores", "hevc", "webm", "png"], default="prores",
                    help="prores = transparent .mov for editors (default); hevc = small transparent .mov (Mac only); "
                         "webm = transparent web video; png = one still frame")
-    p.add_argument("--statusbar", choices=["cover", "left", "none"], default="cover",
-                   help="cover = hide the whole status bar (default); left = hide only the clock/red dot side; none = leave it")
+    p.add_argument("--statusbar", choices=["fake", "cover", "left", "none"], default="fake",
+                   help="fake = replace it with a clean iPhone status bar: time, signal, 5G, battery (default); "
+                        "cover = blank bar; left = blank only the clock/red dot side; none = leave it")
+    p.add_argument("--time", default="9:41", help="time shown in the fake status bar (default 9:41)")
+    p.add_argument("--network", default="5G", help="network label, e.g. 5G, LTE, 5G+ (default 5G)")
+    p.add_argument("--battery", type=int, default=85, help="battery level %% in the fake status bar (default 85)")
+    p.add_argument("--font", help="font file for the status bar (default: San Francisco on Mac)")
     p.add_argument("--statusbar-pct", type=float, default=6.4, help="status bar height as %% of video height (default 6.4)")
     p.add_argument("--statusbar-colour", help="force the cover colour, e.g. 0xffffff (default: auto-sampled)")
     p.add_argument("--trim-start", type=float, default=0.0, help="seconds to cut from the start (e.g. Control Center closing)")
