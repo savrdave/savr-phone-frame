@@ -1,0 +1,164 @@
+{
+ "size": 200,
+ "height": 243,
+ "cap_top": 45,
+ "cap_bottom": 196,
+ "glyphs": {
+  "0": {
+   "file": "0.png",
+   "advance": 132
+  },
+  "1": {
+   "file": "1.png",
+   "advance": 85
+  },
+  "2": {
+   "file": "2.png",
+   "advance": 125
+  },
+  "3": {
+   "file": "3.png",
+   "advance": 127
+  },
+  "4": {
+   "file": "4.png",
+   "advance": 133
+  },
+  "5": {
+   "file": "5.png",
+   "advance": 126
+  },
+  "6": {
+   "file": "6.png",
+   "advance": 128
+  },
+  "7": {
+   "file": "7.png",
+   "advance": 115
+  },
+  "8": {
+   "file": "8.png",
+   "advance": 128
+  },
+  "9": {
+   "file": "9.png",
+   "advance": 128
+  },
+  "A": {
+   "file": "A.png",
+   "advance": 146
+  },
+  "B": {
+   "file": "B.png",
+   "advance": 132
+  },
+  "C": {
+   "file": "C.png",
+   "advance": 147
+  },
+  "D": {
+   "file": "D.png",
+   "advance": 144
+  },
+  "E": {
+   "file": "E.png",
+   "advance": 121
+  },
+  "F": {
+   "file": "F.png",
+   "advance": 118
+  },
+  "G": {
+   "file": "G.png",
+   "advance": 150
+  },
+  "H": {
+   "file": "H.png",
+   "advance": 149
+  },
+  "I": {
+   "file": "I.png",
+   "advance": 55
+  },
+  "J": {
+   "file": "J.png",
+   "advance": 116
+  },
+  "K": {
+   "file": "K.png",
+   "advance": 141
+  },
+  "L": {
+   "file": "L.png",
+   "advance": 113
+  },
+  "M": {
+   "file": "M.png",
+   "advance": 184
+  },
+  "N": {
+   "file": "N.png",
+   "advance": 152
+  },
+  "O": {
+   "file": "O.png",
+   "advance": 154
+  },
+  "P": {
+   "file": "P.png",
+   "advance": 129
+  },
+  "Q": {
+   "file": "Q.png",
+   "advance": 155
+  },
+  "R": {
+   "file": "R.png",
+   "advance": 130
+  },
+  "S": {
+   "file": "S.png",
+   "advance": 130
+  },
+  "T": {
+   "file": "T.png",
+   "advance": 132
+  },
+  "U": {
+   "file": "U.png",
+   "advance": 147
+  },
+  "V": {
+   "file": "V.png",
+   "advance": 146
+  },
+  "W": {
+   "file": "W.png",
+   "advance": 204
+  },
+  "X": {
+   "file": "X.png",
+   "advance": 144
+  },
+  "Y": {
+   "file": "Y.png",
+   "advance": 143
+  },
+  "Z": {
+   "file": "Z.png",
+   "advance": 130
+  },
+  ":": {
+   "file": "colon.png",
+   "advance": 64
+  },
+  "+": {
+   "file": "plus.png",
+   "advance": 135
+  },
+  " ": {
+   "file": "space.png",
+   "advance": 50
+  }
+ }
+}

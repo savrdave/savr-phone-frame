@@ -129,20 +129,26 @@ def statusbar_colour(video, sb_h, workdir, at=0.5):
 # ---------- fake iOS status bar (time, signal, 5G, battery) ----------
 import struct, zlib
 
-FONT_CANDIDATES = [
-    "/System/Library/Fonts/SFNS.ttf",                 # San Francisco (macOS)
-    "/System/Library/Fonts/SFNSDisplay.ttf",
-    "/System/Library/Fonts/Helvetica.ttc",
-    "/usr/share/fonts/opentype/inter/Inter-SemiBold.otf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-]
+GLYPHS = HERE / "assets" / "glyphs"
 
 
-def find_font(override=None):
-    for f in ([override] if override else []) + FONT_CANDIDATES:
-        if f and Path(f).exists():
-            return f
-    sys.exit("No font found for the status bar. Pass one with --font /path/to/font.ttf")
+def text_layers(text, size_px, x, mid, align):
+    """Lay out pre-rendered glyphs (no drawtext needed). Returns [(png, x, y, w, h)]."""
+    meta = json.loads((GLYPHS / "metrics.json").read_text())
+    k = size_px / meta["size"]
+    chars = [c for c in text.upper() if c in meta["glyphs"]]
+    total = sum(meta["glyphs"][c]["advance"] for c in chars) * k
+    cx = x - total / 2 if align == "centre" else (x - total if align == "right" else x)
+    y = mid - (meta["cap_top"] + meta["cap_bottom"]) / 2 * k
+    h = max(2, int(round(meta["height"] * k)))
+    layers = []
+    for c in chars:
+        g = meta["glyphs"][c]
+        w = max(1, int(round(g["advance"] * k)))
+        if c != " ":
+            layers.append((GLYPHS / g["file"], int(round(cx)), int(round(y)), w, h))
+        cx += g["advance"] * k
+    return layers
 
 
 def write_png(path, w, h, rgba):
@@ -213,16 +219,21 @@ def make_status_bar(path, W, H, bg_hex, args, workdir):
     _paint(buf, W, H, fg, 0.4, bx1 + 1.2 * s, mid - 2.2 * s, bx1 + 2.6 * s, mid + 2.2 * s, 0.7 * s)
     base = Path(workdir) / "sb_base.png"
     write_png(base, W, H, buf)
-    # text: time on the left, network label before the battery
-    font = find_font(args.font).replace(":", "\\:")
-    col = "black" if light_bg else "white"
-    t = args.time.replace(":", "\\:")
-    tsize = int(round(17 * s)); nsize = int(round(13.5 * s))
-    vf = (f"drawtext=fontfile='{font}':text='{t}':fontsize={tsize}:fontcolor={col}:"
-          f"x={int(66 * s)}-text_w/2:y={mid:.0f}-text_h/2,"
-          f"drawtext=fontfile='{font}':text='{args.network}':fontsize={nsize}:fontcolor={col}:"
-          f"x={int(335 * s)}-text_w:y={mid:.0f}-text_h/2")
-    run([FFMPEG, "-y", "-v", "error", "-i", str(base), "-vf", vf, "-pix_fmt", "rgba", str(path)])
+    # text: time on the left, network label just before the battery
+    layers = text_layers(args.time, 17 * s, 66 * s, mid, "centre") + \
+        text_layers(args.network, 13.5 * s, 335 * s, mid, "right")
+    cmd = [FFMPEG, "-y", "-v", "error", "-i", str(base)]
+    graph, prev = [], "[0:v]"
+    tint = "colorchannelmixer=rr=0:gg=0:bb=0," if light_bg else ""
+    for i, (png, x, y, w, h) in enumerate(layers, start=1):
+        cmd += ["-i", str(png)]
+        graph.append(f"[{i}:v]format=rgba,{tint}scale={w}:{h}:flags=lanczos[g{i}]")
+        graph.append(f"{prev}[g{i}]overlay={x}:{y}:format=auto[o{i}]")
+        prev = f"[o{i}]"
+    if layers:
+        cmd += ["-filter_complex", ";".join(graph), "-map", prev]
+    cmd += ["-frames:v", "1", "-pix_fmt", "rgba", str(path)]
+    run(cmd)
 
 
 def process(video, args, bez, outdir, workdir):
@@ -312,7 +323,6 @@ def main():
     p.add_argument("--time", default="9:41", help="time shown in the fake status bar (default 9:41)")
     p.add_argument("--network", default="5G", help="network label, e.g. 5G, LTE, 5G+ (default 5G)")
     p.add_argument("--battery", type=int, default=85, help="battery level %% in the fake status bar (default 85)")
-    p.add_argument("--font", help="font file for the status bar (default: San Francisco on Mac)")
     p.add_argument("--statusbar-pct", type=float, default=6.4, help="status bar height as %% of video height (default 6.4)")
     p.add_argument("--statusbar-colour", help="force the cover colour, e.g. 0xffffff (default: auto-sampled)")
     p.add_argument("--trim-start", type=float, default=0.0, help="seconds to cut from the start (e.g. Control Center closing)")
