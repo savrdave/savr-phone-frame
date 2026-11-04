@@ -28,7 +28,7 @@ Add any of these after `./frame.sh`:
 
 | Option | What it does |
 |---|---|
-| `--format hevc` | Small transparent .mov that plays on iPhone (Mac only). Use this if CapCut on your phone shows a black background with the default. |
+| `--format prores` | Huge ProRes 4444 .mov with transparency, if an editor won't read the default |
 | `--format webm` | Transparent video for websites |
 | `--format png` | One still image of the framed phone, for thumbnails and carousels |
 | `--time 10:24` | Change the time in the fake status bar (default 9:41) |
@@ -43,6 +43,6 @@ By default `frame.sh` trims 0.5 sec off each end, which cuts the Control Center 
 
 ## Notes
 
-- The default output is ProRes 4444 (.mov with transparency). It's big but every editor reads it. If CapCut shows a black box instead of transparency, rerun with `--format hevc`.
+- On a Mac, `./frame.sh` makes small transparent HEVC .mov files (tens of MB). `--format prores` gives ProRes 4444 instead: every editor reads it, but a 30 sec clip can be 1 to 2 GB.
 - The fake status bar takes its background colour from your app just below the status bar, and switches between white and black icons to match. If an app has a gradient or photo at the top, set it manually with `--statusbar-colour 0xffffff`.
 - Works with any bezel PNG that has a transparent screen opening, not just Apple's.
