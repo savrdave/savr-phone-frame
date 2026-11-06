@@ -276,12 +276,16 @@ def process(video, args, bez, outdir, workdir):
         f"[1:v]format=rgba[bz];"
         f"[t][bz]overlay=0:0:format=auto"
     )
-    if args.height:
+    fmt = args.format
+    if fmt == "mp4":  # no transparency: phone centred on a solid colour, 1080x1920 (for Descript)
+        graph += (f",scale=-2:{args.phone_height}:flags=lanczos[ph];"
+                  f"color=c={args.background}:s=1080x1920:r={fps:.3f}[pbg];"
+                  f"[pbg][ph]overlay=(W-w)/2:(H-h)/2:format=auto,format=yuv420p")
+    elif args.height:
         graph += f",scale=-2:{args.height}:flags=lanczos"
     graph += "[out]"
 
-    fmt = args.format
-    ext = {"prores": ".mov", "hevc": ".mov", "webm": ".webm", "png": ".png"}[fmt]
+    ext = {"prores": ".mov", "hevc": ".mov", "webm": ".webm", "png": ".png", "mp4": ".mp4"}[fmt]
     out = outdir / f"{video.stem}_framed{ext}"
 
     cmd = [FFMPEG, "-y", "-v", "error", "-ss", f"{start}", "-t", f"{length}", "-i", str(video),
@@ -301,6 +305,9 @@ def process(video, args, bez, outdir, workdir):
         elif fmt == "hevc":  # Mac only: small files, transparent, plays natively on iPhone
             cmd += ["-c:v", "hevc_videotoolbox", "-pix_fmt", "bgra", "-alpha_quality", "0.75", "-tag:v", "hvc1", "-b:v", "12M"]
             if args.audio: cmd += ["-c:a", "aac"]
+        elif fmt == "mp4":
+            cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "16", "-pix_fmt", "yuv420p", "-movflags", "+faststart"]
+            if args.audio: cmd += ["-c:a", "aac"]
         elif fmt == "webm":
             cmd += ["-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-b:v", "0", "-crf", "28", "-row-mt", "1"]
             if args.audio: cmd += ["-c:a", "libopus"]
@@ -314,9 +321,12 @@ def main():
     p.add_argument("input", help="a video file, or a folder of videos")
     p.add_argument("--bezel", required=True, help="Apple product bezel PNG (transparent screen)")
     p.add_argument("--out", default="out", help="output folder (default: out)")
-    p.add_argument("--format", choices=["prores", "hevc", "webm", "png"], default="prores",
+    p.add_argument("--format", choices=["prores", "hevc", "webm", "png", "mp4"], default="prores",
                    help="prores = transparent .mov for editors (default); hevc = small transparent .mov (Mac only); "
-                        "webm = transparent web video; png = one still frame")
+                        "webm = transparent web video; png = one still frame; "
+                        "mp4 = phone on SAVR green, 1080x1920 H.264 (for Descript, no transparency)")
+    p.add_argument("--background", default="0x2b4c2c", help="background colour for --format mp4 (default SAVR green)")
+    p.add_argument("--phone-height", type=int, default=1720, help="phone height in px for --format mp4 (default 1720)")
     p.add_argument("--statusbar", choices=["fake", "cover", "left", "none"], default="fake",
                    help="fake = replace it with a clean iPhone status bar: time, signal, 5G, battery (default); "
                         "cover = blank bar; left = blank only the clock/red dot side; none = leave it")

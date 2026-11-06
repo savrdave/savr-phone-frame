@@ -46,3 +46,18 @@ By default `frame.sh` trims 0.5 sec off each end, which cuts the Control Center 
 - On a Mac, `./frame.sh` makes small transparent HEVC .mov files (tens of MB). `--format prores` gives ProRes 4444 instead: every editor reads it, but a 30 sec clip can be 1 to 2 GB.
 - The fake status bar takes its background colour from your app just below the status bar, and switches between white and black icons to match. If an app has a gradient or photo at the top, set it manually with `--statusbar-colour 0xffffff`.
 - Works with any bezel PNG that has a transparent screen opening, not just Apple's.
+
+## Cutscene (end card)
+
+Double-click **Make Cutscene.command**, drag in the screen recording your video ends on, give it a name (e.g. `montage-A`).
+It freezes on the exact last screen of the framed video, then: screen dims and recedes, green spotlight, SAVR icon pops in,
+coin-flips twice, lands with a flash, shine sweep, holds. 4 seconds.
+
+Results land in `out/cutscenes/`, named `<date>_<name>_cutscene_capcut.mov` (transparent, CapCut) and
+`<date>_<name>_cutscene_descript.mp4` (phone on SAVR green, Descript).
+
+- Freeze somewhere else (you cut the video earlier): type the second when asked, or `--at 21.4`.
+- Dragging in the framed video also works; it finds the original in `inbox/done`.
+- The icon animation lives in `assets/cutscene/`. To change it, edit and run `tools/make_cutscene_assets.py` (needs Pillow + numpy).
+
+`--format mp4` on frame.sh: phone on SAVR green (#2b4c2c), 1080x1920 H.264, for Descript (it rejects ProRes and transparent HEVC).
