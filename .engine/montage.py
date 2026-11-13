@@ -222,11 +222,19 @@ def enc(dest):
             "-pix_fmt", "yuv420p", str(dest)]
 
 
-def seg_video(src, start, dur, dest, fill=True, hold_last=False):
+def seg_video(src, start, dur, dest, fill=True, hold_last=False, crop=0.5, blur=False):
+    """crop: where to cut a wide clip down to vertical, 0 = left edge, 0.5 = centre, 1 = right.
+    blur: keep the whole wide clip, centred, over a blurred copy of itself."""
     w, h, length, transfer = probe(src)
     fix = hdr_fix(transfer) if has_zscale() else ""
-    fit = (f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H}" if fill else
-           f"scale={W}:{H}:force_original_aspect_ratio=decrease,pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:color={GREEN}")
+    if blur:
+        fit = (f"split[a][b];[a]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},"
+               f"boxblur=24:2,eq=brightness=-0.10[bg];[b]scale={W}:-2[fg];[bg][fg]overlay=0:(H-h)/2")
+    elif fill:
+        c = min(1.0, max(0.0, float(crop)))
+        fit = f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H}:(iw-ow)*{c:.3f}:(ih-oh)/2"
+    else:
+        fit = f"scale={W}:{H}:force_original_aspect_ratio=decrease,pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:color={GREEN}"
     pre = []
     if length and start + dur > length:
         if hold_last:

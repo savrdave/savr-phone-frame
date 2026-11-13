@@ -236,7 +236,9 @@ EDIT_HELP = """
           {"at": 0, "file": "IMG_0001.PNG"},
           {"at": 12, "file": "ScreenRecording_....mov", "start": 1.5},
           {"at": 30, "stock": "supermarket checkout"},
-          {"at": 40, "broll": "price tag - mushrooms.mov"}],
+          {"at": 40, "broll": "price tag - mushrooms.mov"},
+          {"at": 50, "broll": "wide clip.mp4", "crop": "left"},   wide clips: crop left/centre/right or 0-1
+          {"at": 60, "broll": "wide clip.mp4", "fit": "blur"}],   or keep it all over a blurred copy
         "end_card": false,                  SAVR end card after the video (default off)
         "skip": false}}}}}
 
@@ -274,7 +276,10 @@ def write_pack(sessions, plan, s):
         out.append("- none")
     own = own_broll()
     out.append(f"\n## Your own B-ROLL clips ({len(own)}), see broll.png")
-    out += [f"- {f.relative_to(montage.BROLL)}" for f in own]
+    for f in own:
+        w, h, dur, _ = montage.probe(f)
+        shape = "wide" if w and h and w > h else "vertical"
+        out.append(f"- {f.relative_to(montage.BROLL)}  ({shape}, {w}x{h}, {dur or 0:.0f}s)")
     out.append(EDIT_HELP)
     (CLAUDE_DIR / "transcript.md").write_text("\n".join(out))
     contact_sheet([f for _, f, _ in inv], CLAUDE_DIR / "drop.png")
@@ -421,7 +426,10 @@ def build_visuals(e, mapped, total, s, jdir, used):
                 length = montage.probe(f)[2]
                 st = float(v.get("start", max(0.0, (length - dur) / 2)))
                 dest = segdir / f"{len(parts):03d}.mp4"
-                montage.seg_video(f, st, dur, dest, fill=True)
+                pos = {"left": 0.0, "centre": 0.5, "center": 0.5, "right": 1.0}
+                crop = v.get("crop", 0.5)
+                crop = pos.get(crop, crop) if isinstance(crop, str) else crop
+                montage.seg_video(f, st, dur, dest, fill=True, crop=crop, blur=v.get("fit") == "blur")
                 parts.append(dest)
                 last_rec = None
         elif "stock" in v:
