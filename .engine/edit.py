@@ -29,7 +29,7 @@ import paths
 from jam import SR, norm, read_wav, write_wav, splice
 
 CLAUDE_DIR = paths.DROP / "claude"
-CUT_GAP = 0.15   # seconds of silence left where something was cut out
+CUT_GAP = 0.24   # seconds of silence left where something was cut out
 EDITS = CLAUDE_DIR / "edits.json"
 NUMBER_WORDS = {"number", "no", "num"}
 
@@ -338,7 +338,9 @@ def plan_audio(ws, x, e, cue):
         # At a cut, keep only a breath of air on each side (about `gap` in total);
         # at the very start and end of the jam, leave a little more room.
         a = quietest(x, s0 - (0.18 if k == 0 else gap * 0.45), s0 - 0.01)
-        b = quietest(x, e0 + 0.02, e0 + (0.25 if k == len(runs) - 1 else gap * 0.55))
+        # never cut in the first 0.09s after a word: soft endings like the "s" in
+        # "seconds" are quiet and were getting clipped
+        b = quietest(x, e0 + 0.09, e0 + (0.25 if k == len(runs) - 1 else max(0.12, gap * 0.6)))
         if iv and a <= iv[-1][1]:
             iv[-1][1] = max(iv[-1][1], b)
         else:
