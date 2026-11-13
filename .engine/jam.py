@@ -341,13 +341,16 @@ def shape_voice(in_wav, out_wav, preset):
 # ---------------------------------------------------------------- captions
 
 def find_font():
-    for p in ["/System/Library/Fonts/Supplement/Arial Black.ttf",
+    """Bundled Inter ExtraBold first, so captions look the same on every Mac.
+    (On David's Mac the Arial paths were missing and captions came out tiny.)"""
+    for p in [str(Path(__file__).parent / "assets" / "fonts" / "Inter-ExtraBold.otf"),
+              "/System/Library/Fonts/Supplement/Arial Black.ttf",
               "/System/Library/Fonts/Supplement/Arial Bold.ttf",
               "/Library/Fonts/Arial Bold.ttf",
               "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]:
         if Path(p).exists():
             return p
-    return None
+    raise SystemExit("No caption font found (.engine/assets/fonts is missing). Run git pull.")
 
 
 def clean_text(t):

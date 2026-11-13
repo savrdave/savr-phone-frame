@@ -236,6 +236,7 @@ EDIT_HELP = """
           {"at": 12, "file": "ScreenRecording_....mov", "start": 1.5},
           {"at": 30, "stock": "supermarket checkout"},
           {"at": 40, "broll": "price tag - mushrooms.mov"}],
+        "end_card": false,                  SAVR end card after the video (default off)
         "skip": false}}}}}
 
 Always removed without listing them: ums/uhs, the restart word, and [unclear] pieces
@@ -352,11 +353,20 @@ def plan_audio(ws, x, e, cue):
     return iv, mapped, off, sorted(drop)
 
 
+def _loose(n):
+    return re.sub(r"\s+", " ", n.replace("\u202f", " ").replace("\u00a0", " ")).strip().lower()
+
+
 def find_file(name):
     for folder in (paths.SCREEN_IN, paths.SHOTS_IN, montage.VISUALS, paths.DROP, montage.BROLL):
         if (folder / name).exists():
             return folder / name
-    hits = list(montage.BROLL.rglob(name)) if montage.BROLL.exists() else []
+        # Mac screenshot names have an invisible special space before AM/PM
+        if folder.exists():
+            for f in folder.iterdir():
+                if _loose(f.name) == _loose(name):
+                    return f
+    hits = [f for f in montage.BROLL.rglob("*") if _loose(f.name) == _loose(name)] if montage.BROLL.exists() else []
     if hits:
         return hits[0]
     raise ValueError(f"edits name a file that isn't there: {name}")
@@ -464,7 +474,7 @@ def render_jam(n, ws, e, x, s, voice, plan, date, work, used, auto):
     bg = str(visuals) if visuals else ""
     hook_img = montage.hook_png(hook, jdir) if hook else None
     tmp = jdir / "final.mp4"
-    if s.get("cutscene", True):
+    if e.get("end_card", s.get("end_card_default", False)):
         body = jdir / "body.mp4"
         jam.render_video(voiced, caps, bg, total, body, hook_img)
         end = montage.cutscene_for(last_rec, jdir)
