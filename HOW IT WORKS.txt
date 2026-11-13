@@ -45,6 +45,8 @@ B-ROLL       your clips + stock from Pixabay (B-ROLL/stock).
 FINISHED     working files. Go to the Trash by themselves after 30 days.
 
 OTHER BUTTONS
+Redo Last Session  puts the last finished session back in DROP HERE, so Make Jam
+                   can render it again (after Claude changes the edits).
 Frame Videos   a screen recording in an iPhone, end card on the end. For CapCut.
 Voice Only     puts your voice preset on audio you already edited in Descript.
 Voice Test     hear your voice in every preset.

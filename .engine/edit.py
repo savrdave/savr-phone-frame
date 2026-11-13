@@ -590,18 +590,44 @@ def run(sources, s, voice, auto=False, only=None):
 
 
 def archive(sources, files, date):
-    """Session done: memo, used files, plan and Claude's folder go to ORIGINALS."""
-    dest = paths.ORIGINALS / "sessions" / f"{date} {datetime.datetime.now():%H%M}"
+    """Session done: memo, used files, plan and Claude's folder go to ORIGINALS.
+    Every move is written to moves.json, so Redo Last Session can put it all back."""
+    dest = paths.ORIGINALS / "sessions" / f"{date} {datetime.datetime.now():%H%M%S}"
+    dest.mkdir(parents=True, exist_ok=True)
+    moves = []
     for src in sources:
         if src.exists() and src.parent == jam.INBOX:
-            paths.move_original(src, paths.VOICE_DONE)
+            moves.append((src, paths.move_original(src, paths.VOICE_DONE)))
     for f in set(files):
         if f.exists() and paths.DROP in f.parents:
-            paths.move_original(f, paths.SCREEN_DONE)
-    dest.mkdir(parents=True, exist_ok=True)
+            moves.append((f, paths.move_original(f, paths.SCREEN_DONE)))
     if (paths.DROP / "plan.txt").exists():
+        moves.append((paths.DROP / "plan.txt", dest / "plan.txt"))
         shutil.move(str(paths.DROP / "plan.txt"), dest / "plan.txt")
     if CLAUDE_DIR.exists():
         for f in CLAUDE_DIR.iterdir():
-            shutil.move(str(f), dest / f.name)
+            if f.name != ".failed.json":
+                moves.append((f, dest / f.name))
+                shutil.move(str(f), dest / f.name)
+            else:
+                f.unlink()
+    (dest / "moves.json").write_text(json.dumps([[str(a), str(b)] for a, b in moves], indent=1))
     print(f"  Session filed in {dest.relative_to(jam.ROOT)}")
+
+
+def redo_last():
+    """Put the last finished session back in DROP HERE, to render it again
+    (after Claude changes the edits, or the tool changed)."""
+    sessions = sorted(p for p in (paths.ORIGINALS / "sessions").glob("*") if (p / "moves.json").exists())
+    if not sessions:
+        raise SystemExit("No finished session to redo.")
+    last = sessions[-1]
+    back = 0
+    for a, b in json.loads((last / "moves.json").read_text()):
+        a, b = Path(a), Path(b)
+        if b.exists() and not a.exists():
+            a.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(b), str(a))
+            back += 1
+    (last / "moves.json").rename(last / "moves.done.json")
+    print(f"Put {back} file(s) from {last.name} back in DROP HERE. Double-click Make Jam to render again.")

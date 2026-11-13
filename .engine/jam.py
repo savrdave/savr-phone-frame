@@ -608,6 +608,7 @@ def main():
                     help="apply the voice to already-edited audio, no cuts, no video")
     ap.add_argument("--family", help="only audition presets starting with this, e.g. bc")
     ap.add_argument("--auto", action="store_true", help="no Claude: automatic edits and visuals")
+    ap.add_argument("--redo", action="store_true", help="put the last finished session back to render again")
     args = ap.parse_args()
     for tool in ("ffmpeg", "ffprobe"):
         if not shutil.which(tool):
@@ -639,6 +640,10 @@ def main():
             voice_only(f, s, voice)
             if f.parent == paths.DROP / "voice only":
                 paths.move_original(f, paths.ORIGINALS / "voice only")
+        return
+    if args.redo:
+        import edit
+        edit.redo_last()
         return
     if not args.source:
         sort_drop()
