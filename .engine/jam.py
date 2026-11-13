@@ -67,6 +67,11 @@ DEFAULTS = {
 BC = ["equalizer=f=100:t=q:w=1:g=4", "equalizer=f=250:t=q:w=1:g=-3",
       "equalizer=f=3000:t=q:w=1.2:g=4", "equalizer=f=8000:t=q:w=1:g=2"]
 VOICES = {
+    # raw: your recording untouched, only evened out in volume.
+    # light: rumble cut + gentle levelling, no noise reduction (that's what
+    # made every preset sound hollow and the same).
+    "raw":        (1.00,  0.0, 1.00, "none", []),
+    "light":      (1.00,  0.0, 1.00, "none", []),
     "natural":    (1.00,  0.0, 1.00, "std", []),
     "broadcast":  (1.00,  0.0, 1.00, "broadcast", []),
     "warm":       (0.97, -1.0, 1.00, "warm", []),
@@ -80,6 +85,7 @@ VOICES = {
     "bc-grit":    (1.00, -0.9, 1.00, "broadcast", ["sat"]),
 }
 EQ = {
+    "none": [],
     "std": ["equalizer=f=120:t=q:w=1:g=2", "equalizer=f=300:t=q:w=1:g=-2",
             "equalizer=f=3500:t=q:w=1.5:g=3"],
     "warm": ["equalizer=f=150:t=q:w=1:g=3", "equalizer=f=350:t=q:w=1:g=-2",
@@ -330,6 +336,18 @@ def shape_voice(in_wav, out_wav, preset):
         shifted = call(snd, "Change gender", 75, 600, formant, new_median, rng, 1.0)
         src = out_wav.with_suffix(".shift.wav")
         shifted.save(str(src), "WAV")
+    if preset == "raw":
+        chain = ["aresample=48000", "loudnorm=I=-14:TP=-1.5:LRA=11", "aresample=48000"]
+        run(["ffmpeg", "-y", "-v", "error", "-i", str(src), "-af", ",".join(chain),
+             "-ac", "1", "-c:a", "pcm_s16le", str(out_wav)])
+        return
+    if preset == "light":
+        chain = ["aresample=48000", "highpass=f=70",
+                 "acompressor=threshold=-24dB:ratio=2:attack=15:release=200:makeup=1",
+                 "loudnorm=I=-14:TP=-1.5:LRA=11", "aresample=48000"]
+        run(["ffmpeg", "-y", "-v", "error", "-i", str(src), "-af", ",".join(chain),
+             "-ac", "1", "-c:a", "pcm_s16le", str(out_wav)])
+        return
     chain = ["aresample=48000", "highpass=f=80", "afftdn=nr=10:nf=-45", *EQ[eq],
              *[f for e in extra for f in EXTRA[e]],
              "acompressor=threshold=-20dB:ratio=3.5:attack=8:release=150:makeup=2",
