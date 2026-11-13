@@ -1,47 +1,47 @@
 SAVR VIDEO MACHINE
 
 THE FLOW
-1. Claude plans the jams and writes plan.txt into DROP HERE: every jam, what's on
-   screen, the hook, and the stock footage to search for.
-2. Record. One voice memo for the whole session: say "jam 7", talk, "jam 8", talk.
-   For "screen" jams, screen record SAVR in jam order. For "headlines" jams,
-   screenshot the headlines in jam order.
-3. AirDrop everything straight into DROP HERE. No subfolders, no renaming. It gets
-   sorted by type, and matched to jams in the order you recorded or took it.
-4. Double-click Make Jam. Videos land in READY, plus a review sheet.
-5. Check the review sheet (or give it to Claude), post, drag the video to POSTED.
+1. Claude plans the jams and puts plan.txt in DROP HERE: each jam's hook,
+   talking points and what's on screen. Talking points, not a script: say it
+   your way.
+2. Record. One voice memo: say "jam 7", pause, talk. "jam 8", pause, talk.
+   Screen record SAVR and screenshot headlines for the jams that need them.
+3. AirDrop everything straight into DROP HERE. No folders, no renaming.
+4. Double-click Make Jam. (Stage 1: transcribes, a few minutes.)
+5. Tell Claude "jams ready". Claude reads what you actually said, decides the
+   cuts, fixes misheard words and picks which visual starts on which word.
+6. Double-click Make Jam again. (Stage 2: videos land in READY with a review sheet.)
+7. Watch each video once, post, drag it to POSTED.
 
 RECORDING
-- Restart a sentence any time: pause, say it again from the start. The last
-  version is kept. "Prices are up thirty... Prices are up 33% since 2020."
-- Stumbled on a couple of words: pause, back up, say them again.
-- Ums, uhs and long pauses get cut. Normal breathing pauses stay.
-- Started down a totally different sentence and want it gone: say "again"
-  (pause before and after). That throws out everything since "jam 7" and starts
-  jam 7 over. Saying "jam 7" again does the same.
+- Messed up a sentence: say "zebra", pause, say the sentence again from the
+  start. Everything from the start of the bad sentence to "zebra" is cut.
+- Start a whole jam over: say "jam 7" again. The last one wins.
+- Pause before every "jam N" so it's heard as a marker.
+- Ums, uhs and long pauses get cut. Normal breaths stay.
+- Restarts you don't flag with "zebra", Claude usually catches anyway.
 
 IF SOMETHING GOES WRONG
-- A jam that fails doesn't stop the others. The review sheet says which failed.
-  Double-click Make Jam again and it redoes only those.
-- The review sheet lists what got cut from each jam. If a real line went missing,
-  tell Claude which one.
+- A jam that fails doesn't stop the others. The review sheet says why.
+  Fix it (or tell Claude), double-click Make Jam, and it redoes only those.
+- Nothing moves out of DROP HERE until every jam is made.
+- No Claude available: run Make Jam with --auto (cuts ums and "zebra"
+  restarts, guesses visuals). Expect weaker videos.
 
 PLAN.TXT LINES  (Claude writes these)
 07 | screen | Grocery prices are up 33% since 2020
 08 | broll | Points aren't saving you money | loyalty card checkout; receipt closeup
 09 | headlines2+screen | Every headline says prices went up
-screen = your next screen recording. headlines2 = your next 2 screenshots.
-broll = stock footage from the searches after the last |. Combine with +.
 
 FOLDERS YOU TOUCH
-DROP HERE    everything going in
+DROP HERE    everything going in. DROP HERE/claude is Claude's (transcript, edits).
 READY        finished, not posted yet (plus the review sheet)
 POSTED       posted. Goes to the Trash by itself after 30 days.
 
 FOLDERS YOU DON'T NEED TO OPEN
-ORIGINALS    your raw voice memos, screen recordings and screenshots. Kept forever.
-B-ROLL       stock footage from Pixabay (B-ROLL/stock). Your own clips here are only
-             used if "use_own_broll": true is in .engine/jam_settings.json.
+ORIGINALS    voice memos, screen recordings, screenshots, and each session's plan
+             and edits (ORIGINALS/sessions). Kept forever.
+B-ROLL       your clips + stock from Pixabay (B-ROLL/stock).
 FINISHED     working files. Go to the Trash by themselves after 30 days.
 
 OTHER BUTTONS

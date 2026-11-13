@@ -51,7 +51,8 @@ DEFAULTS = {
     "min_pause": 0.5,        # pauses longer than this get cut down (was 0.25: too breathless)
     "keep_pause": 0.42,      # how much of each cut pause is left in
     "restart_gap": 0.45,     # a pause this long ends a phrase, for spotting restarted sentences
-    "use_own_broll": False,  # your own B-ROLL clips only get picked when this is true
+    "use_own_broll": False,
+    "restart_word": "zebra", # say this, pause, restart the sentence  # your own B-ROLL clips only get picked when this is true
     "caption_max_words": 3,
     "caption_max_chars": 18,
     "caption_y": 0.62,
@@ -221,8 +222,8 @@ _MODEL = {}
 # Written with false starts and ums on purpose: Whisper copies the style of the
 # prompt, so this keeps it from silently "cleaning up" a restarted sentence
 # (if the first attempt isn't in the transcript, it can't be cut).
-PROMPT = ("Jam one. Um, grocery prices are up, uh... Grocery prices are up 33% since 2020. "
-          "I use, I use SAVR to compare prices. Again. Jam two.")
+PROMPT = ("Jam one. Um, grocery prices are up, uh... zebra. Grocery prices are up 33% since 2020. "
+          "I use, I use SAVR to compare prices. Jam two.")
 
 
 def get_model(name):
@@ -296,193 +297,9 @@ def read_number(words, i):
     return None, 0
 
 
-def find_markers(words, tl):
-    events, i = [], 0
-    while i < len(words):
-        t = norm(words[i]["w"])
-        m = re.fullmatch(r"(?:jam|jem|gem)#?(\d+)", t)
-        if m:
-            events.append(("jam", int(m.group(1)), i, i + 1))
-            i += 1
-            continue
-        if t in JAM_WORDS:
-            n, used = read_number(words, i + 1)
-            if n is not None:
-                k = i + 1 + used
-                # 'Jam for... four.' : skip the number said twice
-                while k < len(words) and read_number(words, k)[0] == n:
-                    k += 1
-                events.append(("jam", n, i, k))
-                i = k
-                continue
-        if t in ("again", "redo", "restart"):
-            # Pauses are measured in the ORIGINAL recording, before tightening.
-            gb = tl.to_orig(words[i]["s"]) - tl.to_orig(words[i - 1]["e"]) if i > 0 else 9
-            ga = tl.to_orig(words[i + 1]["s"]) - tl.to_orig(words[i]["e"]) if i + 1 < len(words) else 9
-            if gb >= 0.5 and ga >= 0.5:
-                events.append(("again", None, i, i + 1))
-        i += 1
-    return events
 
 
-def split_jams(words, tl):
-    events = find_markers(words, tl)
-    jam_events = [e for e in events if e[0] == "jam"]
-    if not jam_events:
-        return [(1, words)]
-    best = {}
-    for k, (_, n, _, body_start) in enumerate(jam_events):
-        body_end = jam_events[k + 1][2] if k + 1 < len(jam_events) else len(words)
-        agains = [e for e in events if e[0] == "again" and body_start <= e[2] < body_end]
-        takes, start = [], body_start
-        for _, _, a_i, a_end in agains:
-            takes.append(words[start:a_i])
-            start = a_end
-        takes.append(words[start:body_end])
-        takes = [t for t in takes if len(t) >= 4]
-        if takes:
-            best[n] = takes[-1]   # a jam number said again later replaces the earlier one
-    return sorted(best.items())
 
-
-def drop_restarts(words, tl=None):
-    """Cut false starts and keep the last attempt.
-
-    Exact:  'I use, I use SAVR to'        -> 'I use SAVR to'
-    Reword: 'I prep 5 meals. I portion 5 meals' -> 'I portion 5 meals'
-            (a short phrase, one word swapped, after a pause)
-    """
-    def orig(t):
-        return tl.to_orig(t) if tl else t
-
-    out = list(words)
-    changed = True
-    while changed:
-        changed = False
-        n = len(out)
-        for i in range(n):
-            for d in range(1, 21):
-                j = i + d
-                if j >= n:
-                    break
-                m = 0
-                while j + m < n and m < d and norm(out[i + m]["w"]) == norm(out[j + m]["w"]):
-                    m += 1
-                if d == 1:
-                    ok = m == 1 and norm(out[i]["w"]) not in NO_STUTTER and bool(norm(out[i]["w"]))
-                elif d == 2:
-                    ok = m == 2
-                else:
-                    ok = m >= d - 1
-                if not ok and 3 <= d <= 5 and j + d <= n and m >= 1:
-                    # A short phrase said again with one word swapped, after a pause.
-                    same = sum(norm(out[i + k]["w"]) == norm(out[j + k]["w"]) for k in range(d))
-                    pause = orig(out[j]["s"]) - orig(out[j - 1]["e"])
-                    ok = same >= d - 1 and pause >= 0.4
-                if not ok and 3 <= d <= 6 and j + 2 <= n and m >= 2:
-                    # Same opening, then a different ending: 'roughly 10 times a day.
-                    # Roughly 10 days at a time.' keeps the second.
-                    a = [norm(w["w"]) for w in out[i:j]]
-                    b = [norm(w["w"]) for w in out[j:j + d + 1]]
-                    shared = sum(min(a.count(x), b.count(x)) for x in set(a))
-                    pause = orig(out[j]["s"]) - orig(out[j - 1]["e"])
-                    ok = shared / d >= 0.6 and pause >= 0.3  # needs a pause, or real lines get eaten
-                if ok:
-                    del out[i:j]
-                    changed = True
-                    break
-            if changed:
-                break
-    return out
-
-
-def drop_sentence_restarts(words, tl=None, gap=0.45):
-    """Restarted sentences, the way you actually do it:
-        'Grocery prices are up thirty... Grocery prices are up 33% since 2020.'
-    keeps only the second. Phrases are split on pauses in the original recording.
-    The earlier phrase is a false start when the next one opens with the same
-    two words and the earlier one either trails off (no full stop) or mostly
-    repeats the next one. A short stub (3 words or less) followed by a phrase
-    with the same first word also counts. Chains work: the last attempt wins."""
-    if len(words) < 3:
-        return words
-
-    def orig(t):
-        return tl.to_orig(t) if tl else t
-
-    phrases, cur = [], [words[0]]
-    for prev, w in zip(words, words[1:]):
-        if orig(w["s"]) - orig(prev["e"]) >= gap:
-            phrases.append(cur)
-            cur = []
-        cur.append(w)
-    phrases.append(cur)
-    keep = []
-    for k, ph in enumerate(phrases):
-        if k + 1 < len(phrases):
-            a = [x for x in (norm(w["w"]) for w in ph) if x]
-            b = [x for x in (norm(w["w"]) for w in phrases[k + 1]) if x]
-            if a and b:
-                ended = ph[-1]["w"].rstrip()[-1:] in ".?!"
-                overlap = sum(min(a.count(x), b.count(x)) for x in set(a)) / len(a)
-                if len(a) >= 2 and a[:2] == b[:2] and (not ended or overlap >= 0.6):
-                    continue
-                if len(a) <= 3 and a[0] == b[0] and not ended:
-                    continue
-        keep.extend(ph)
-    return keep
-
-
-def plan_cuts(take, total_len, s, tl=None):
-    joins = [float(j) for j in tl.offsets[1:]] if tl else []
-    pos = {id(w): k for k, w in enumerate(take)}
-    words = [w for w in take if norm(w["w"]) not in FILLERS]
-    words = drop_restarts(words, tl)
-    words = drop_sentence_restarts(words, tl, s.get("restart_gap", 0.45))
-    if not words:
-        raise ValueError("nothing left after cutting restarts")
-    kept_ids = {id(w) for w in words}
-    removed = [w["w"] for w in take if id(w) not in kept_ids]
-    # Audio Whisper didn't write down (often a mumbled first attempt) shows up as
-    # a gap between two words that's longer than any pause we left in. Cut it.
-    gap_cut = s["keep_pause"] + 0.3
-    pad_b, pad_a = 0.12, 0.25
-    intervals, j, gaps = [], 0, []
-    a = max(0.0, words[0]["s"] - pad_b)
-    for prev, nxt in zip(words, words[1:]):
-        skipped = pos[id(nxt)] != pos[id(prev)] + 1
-        if not skipped and nxt["s"] - prev["e"] > gap_cut:
-            end = prev["e"] + pad_a
-            start = max(end, nxt["s"] - pad_b)
-            gaps.append(round(start - end, 1))
-            intervals.append([a, end])
-            a = start
-            continue
-        # Anything skipped between two kept words (a restart, a filler) becomes a cut.
-        if skipped:
-            # End where the sound actually stops (keeps the 's' on 'dollars'),
-            # or a quarter second after the word if the restart had no pause.
-            first_cut = take[pos[id(prev)] + 1]
-            last_cut = take[pos[id(nxt)] - 1]
-            # End: where the sound stops after the kept word, before the cut words.
-            nat = [j for j in joins if prev["e"] - 0.05 <= j <= first_cut["s"] + 0.05]
-            end = nat[0] if nat else min(prev["e"] + pad_a, (prev["e"] + first_cut["s"]) / 2 + 0.05)
-            # Start: where the sound starts again after the cut words.
-            nat_s = [j for j in joins if last_cut["e"] - 0.05 <= j <= nxt["s"] + 0.05]
-            start = nat_s[-1] if nat_s else max(nxt["s"] - pad_b, (last_cut["e"] + nxt["s"]) / 2 - 0.05)
-            intervals.append([a, end])
-            a = max(start, end)
-    intervals.append([a, min(total_len, words[-1]["e"] + 0.5)])
-    mapped, offset = [], 0.0
-    for ia, ib in intervals:
-        while j < len(words) and words[j]["s"] < ib:
-            w = words[j]
-            ws = offset + max(0.0, w["s"] - ia)
-            we = offset + min(ib, w["e"]) - ia
-            mapped.append({"w": w["w"], "s": ws, "e": min(we, ws + 1.2)})
-            j += 1
-        offset += ib - ia
-    return intervals, mapped, offset, {"words": removed, "gaps": gaps}
 
 
 def visual_cuts(mapped, total, every):
@@ -728,124 +545,7 @@ def voice_only(src, s, voice):
     print(f"  {src.name} -> {dest.relative_to(ROOT)}")
 
 
-def make_one(n, take, x, tl, s, voice, plan, screen, shots, used, date, work):
-    """One jam -> one finished video. Returns a dict for the review sheet."""
-    intervals, mapped, total, cut = plan_cuts(take, len(x) / SR, s, tl)
-    said = clean_text(" ".join(w["w"] for w in mapped))
-    hook = montage.hook_text(n, s, plan)
-    base = unique_base(date, n, hook or said)
-    jdir = work / f"jam{n:02d}"
-    jdir.mkdir(exist_ok=True)
-    raw = jdir / "cut.wav"
-    write_wav(raw, splice(x, intervals))
-    voiced = jdir / f"voice_{voice}.wav"
-    shape_voice(raw, voiced, voice)
-    caps = render_captions(mapped, total, s, jdir)
-    durs = visual_cuts(mapped, total, montage.CLIP_LEN)
-    visuals, last_rec, what, warn = montage.build_background(
-        n, total, said, s, jdir, screen=screen, shots=shots, entry=plan.get(n, {}), durs=durs, used=used)
-    bg = str(visuals) if visuals else s["jams"].get(str(n), {}).get("background", s["default_background"])
-    dest = OUT / f"{base}.mp4"
-    hook_img = montage.hook_png(hook, jdir) if hook else None
-    if s.get("cutscene", True):
-        body = jdir / "body.mp4"
-        render_video(voiced, caps, bg, total, body, hook_img)
-        end = montage.cutscene_for(last_rec, jdir)
-        if end:
-            montage.append_cutscene(body, end, dest)
-            total += montage.probe(end)[2]
-        else:
-            shutil.move(str(body), dest)
-    else:
-        render_video(voiced, caps, bg, total, dest, hook_img)
-    print(f"           visuals: {what}")
-    print(f"  jam {n:02d}  {total:5.1f}s  -> {dest.relative_to(ROOT)}")
-    return {"n": n, "file": dest.name, "secs": total, "hook": hook, "said": said,
-            "cut": cut, "visuals": what, "warn": warn}
 
-
-def review_sheet(src, date, voice, results, failed, planned):
-    """READY/<date> review.md: what each video says, what got cut, what's on screen.
-    Paste it to Claude (or let Claude read it) before posting."""
-    out = [f"# Review: {src.name} ({date}, voice: {voice})\n"]
-    missing = sorted(set(planned) - {r["n"] for r in results} - set(failed))
-    if failed:
-        out.append(f"**FAILED: jam {', '.join(f'{n:02d}' for n in failed)}.** "
-                   "Double-click Make Jam again to redo only these.\n")
-    if missing:
-        out.append(f"**In plan.txt but never heard in the recording: jam "
-                   f"{', '.join(f'{n:02d}' for n in missing)}.** Check you said \"jam N\" clearly.\n")
-    for r in results:
-        out.append(f"## jam {r['n']:02d}  ({r['secs']:.0f}s)  {r['file']}")
-        if r["hook"]:
-            out.append(f"Hook: {r['hook']}")
-        out.append(f"Visuals: {r['visuals']}")
-        for w in r["warn"]:
-            out.append(f"WARNING: {w}")
-        if r["cut"]["words"]:
-            out.append(f"Cut out (restarts, ums): {' '.join(r['cut']['words'])}")
-        if r["cut"]["gaps"]:
-            out.append(f"Cut out (unclear audio, no words): {len(r['cut']['gaps'])} piece(s), "
-                       f"{sum(r['cut']['gaps']):.1f}s")
-        out.append(f"\n{r['said']}\n")
-    name, k = f"{date} review", 1
-    while (OUT / f"{name}.md").exists():
-        k += 1
-        name = f"{date} review {k}"
-    (OUT / f"{name}.md").write_text("\n".join(out))
-    return OUT / f"{name}.md"
-
-
-def process(src, s, voice, args):
-    print(f"\n== {src.name}")
-    work, tight, tl = prepare(src, s)
-    joins = [float(j) for j in tl.offsets[1:-1]]
-    words = transcribe(tight, work / "words.json", s["whisper_model"], joins, work)
-    if not words:
-        print("  Didn't hear any words in that file, skipping.")
-        return
-    jams = split_jams(words, tl)
-    retry = work / "failed.json"
-    if args.only:
-        keep = {int(x) for x in args.only.split(",")}
-        jams = [j for j in jams if j[0] in keep]
-    elif retry.exists():
-        keep = set(json.loads(retry.read_text()))
-        jams = [j for j in jams if j[0] in keep]
-        print(f"  Redoing only the jams that failed last time: {', '.join(str(n) for n in sorted(keep))}")
-    OUT.mkdir(parents=True, exist_ok=True)
-    date = datetime.date.today().isoformat()
-    plan = montage.read_plan()
-    nums = [n for n, _ in jams]
-    print(f"  Found {len(jams)} jam(s): {', '.join(str(n) for n in nums)}")
-    if not plan:
-        print("  No plan.txt in DROP HERE: hooks and screen recordings won't be matched to jams.")
-    screens = montage.assign_screens(nums, plan)
-    shots = montage.assign_shots(nums, plan)
-    x = read_wav(tight)
-    results, failed, used = [], [], set()
-    for n, take in jams:
-        try:
-            r = make_one(n, take, x, tl, s, voice, plan, screens.get(n), shots.get(n, []), used, date, work)
-            results.append(r)
-            # Used screen recordings and screenshots go to ORIGINALS, so a rerun
-            # matches the leftovers to the jams that are left.
-            for f in ([screens[n]] if n in screens else []) + shots.get(n, []):
-                if f.exists():
-                    paths.move_original(f, paths.SCREEN_DONE)
-        except (Exception, SystemExit) as e:
-            failed.append(n)
-            print(f"  jam {n:02d} FAILED: {e}. Carrying on with the rest.")
-    sheet = review_sheet(src, date, voice, results, failed, list(plan) if not retry.exists() else [])
-    print(f"\n  Review sheet: {sheet.relative_to(ROOT)}")
-    if failed:
-        retry.write_text(json.dumps(failed))
-        print(f"  {len(failed)} jam(s) failed. The recording stays in DROP HERE; "
-              "run Make Jam again to redo just those.")
-        return
-    retry.unlink(missing_ok=True)
-    if not args.source and src.parent == INBOX:
-        paths.move_original(src, DONE)
 
 
 def sort_drop():
@@ -886,6 +586,7 @@ def main():
     ap.add_argument("--voice-only", action="store_true",
                     help="apply the voice to already-edited audio, no cuts, no video")
     ap.add_argument("--family", help="only audition presets starting with this, e.g. bc")
+    ap.add_argument("--auto", action="store_true", help="no Claude: automatic edits and visuals")
     args = ap.parse_args()
     for tool in ("ffmpeg", "ffprobe"):
         if not shutil.which(tool):
@@ -921,9 +622,14 @@ def main():
     if not args.source:
         sort_drop()
     sources = pick_sources(args.source)
-    print(f"{len(sources)} recording(s) to process.")
-    for src in sources:
-        process(src, s, voice, args)
+    print(f"{len(sources)} recording(s).")
+    import edit
+    only = {int(x) for x in args.only.split(",")} if args.only else None
+    edit.run(sources, s, voice, auto=args.auto, only=only)
+    try:
+        paths.auto_clean()
+    except Exception:
+        pass
     print("\nDone.")
 
 

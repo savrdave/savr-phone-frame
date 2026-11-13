@@ -89,7 +89,7 @@ def jam_files(n):
     return sorted(found, key=lambda f: f.name.lower())
 
 
-def read_plan():
+def read_plan(strict=False):
     """DROP HERE/plan.txt, one line per jam:
         07 | screen | Grocery prices are up 33% since 2020
         08 | broll | Points aren't saving you money | loyalty card checkout; receipt closeup
@@ -97,15 +97,23 @@ def read_plan():
     -> {7: {"type": "screen", "hook": "...", "searches": [], "headlines": 0}, ...}
     The 4th part (b-roll searches, separated by ;) is written by Claude when planning.
     'headlines2' = the next 2 screenshots go to this jam ('headlines' alone = 1)."""
-    plan = {}
+    plan, bad = {}, []
     p = paths.DROP / "plan.txt"
     if not p.exists():
-        return plan
+        return (plan, bad) if strict else plan
     for line in p.read_text().splitlines():
-        parts = [x.strip() for x in line.split("|")]
+        raw = line.strip().lstrip("-*").strip()
+        if not raw or raw.startswith("#"):
+            continue
+        parts = [x.strip() for x in raw.split("|")]
+        if parts and parts[0] == "":
+            parts = parts[1:]
         m = re.match(r"(?:jam\s*)?0*(\d+)$", parts[0].lower()) if parts else None
         if not m:
+            bad.append(line)
             continue
+        if len(parts) > 4:  # a | inside the hook: everything but the last part is the hook
+            parts = parts[:2] + [" | ".join(parts[2:-1]), parts[-1]]
         kind = parts[1].lower().replace(" ", "") if len(parts) > 1 and parts[1] else "broll"
         h = re.search(r"headlines?:?(\d*)", kind)
         searches = parts[3] if len(parts) > 3 else ""
@@ -113,7 +121,7 @@ def read_plan():
         plan[int(m.group(1))] = {"type": kind, "hook": parts[2] if len(parts) > 2 else "",
                                  "searches": [q.strip() for q in searches.split(";") if q.strip()],
                                  "headlines": (int(h.group(1) or 1) if h else 0)}
-    return plan
+    return (plan, bad) if strict else plan
 
 
 def taken_order(f):
@@ -135,8 +143,18 @@ def taken_order(f):
                 return (0, t, f.name)
     except Exception:
         pass
-    m = re.search(r"(\d{3,})", f.stem)
-    return (1, m.group(1).zfill(12) if m else "", f.name)
+    # Mac: "Screenshot 2026-11-13 at 9.15.02 AM" / "Screen Recording 2026-11-13 at 1.10.05 PM"
+    m = re.search(r"(\d{4}-\d{2}-\d{2}) at (\d{1,2})\.(\d{2})\.(\d{2})\s*([AP]M)?", f.stem, re.I)
+    if m:
+        h = int(m.group(2))
+        if m.group(5):
+            h = h % 12 + (12 if m.group(5).upper() == "PM" else 0)
+        return (0, f"{m.group(1)}T{h:02d}:{m.group(3)}:{m.group(4)}", f.name)
+    m = re.match(r"IMG_(\d+)", f.stem, re.I)
+    if m:
+        return (1, m.group(1).zfill(12), f.name)
+    st = f.stat()
+    return (2, f"{getattr(st, 'st_birthtime', st.st_mtime):020.3f}", f.name)
 
 
 def _queued(folder, exts):
@@ -368,6 +386,9 @@ def _download(link, dest):
         dest.unlink(missing_ok=True)
     finally:
         tmp.unlink(missing_ok=True)
+    # broken or tiny downloads (a 26 KB clip turned up on disk) are thrown away
+    if dest.exists() and (dest.stat().st_size < 150_000 or probe(dest)[2] < 2.5):
+        dest.unlink()
     return dest.exists()
 
 
@@ -379,10 +400,10 @@ def stock_for(searches, need, settings, avoid):
     key = key or settings.get("pexels_key")
     STOCK.mkdir(parents=True, exist_ok=True)
     per = max(2, -(-need // len(searches)) + 1)
-    picked, warn = [], []
+    picked, warn, taken = [], [], set()
     for q in searches:
         slug = _slug(q)
-        have = sorted(f for f in STOCK.glob(f"q {slug} - *.mp4") if f not in avoid)
+        have = sorted(f for f in STOCK.glob(f"q {slug} - *.mp4") if f not in avoid and f not in taken)
         if len(have) < per and provider:
             results = _search(provider, key, q) or []
             if not results and len(q.split()) > 2:
@@ -390,12 +411,14 @@ def stock_for(searches, need, settings, avoid):
             for vid, link in results:
                 if len(have) >= per:
                     break
-                dest = STOCK / f"q {slug} - {provider} {vid}.mp4"
+                same = [f for f in STOCK.glob(f"* - {provider} {vid}.mp4")]  # same video, any search
+                dest = same[0] if same else STOCK / f"q {slug} - {provider} {vid}.mp4"
                 if dest.exists() or _download(link, dest):
-                    if dest not in have and dest not in avoid:
+                    if dest not in have and dest not in avoid and dest not in taken:
                         have.append(dest)
         if not have:
             warn.append(f"no stock found for '{q}'")
+        taken.update(have[:per])
         picked.append(have[:per])
     if not provider:
         warn.append("no pixabay_key in .engine/keys.json, using clips already downloaded")

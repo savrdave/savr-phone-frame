@@ -10,5 +10,5 @@ if [ ! -x $VENV/bin/python ] || ! $VENV/bin/python -c "import parselmouth, faste
     echo "Setup failed. Send Claude a screenshot of this window."
     read -n 1 -s -r -p "Press any key to close."; exit 1; }
 fi
-$VENV/bin/python .engine/jam.py "$@" && open "$([[ " $* " == *" --voice-only "* ]] && echo FINISHED/voice || echo READY)"
+$VENV/bin/python .engine/jam.py "$@" && { [ -f "DROP HERE/claude/transcript.md" ] && [ ! -f "DROP HERE/claude/edits.json" ] && open "DROP HERE/claude" || open "$([[ " $* " == *" --voice-only "* ]] && echo FINISHED/voice || echo READY)"; }
 read -n 1 -s -r -p "Press any key to close."
