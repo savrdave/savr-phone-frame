@@ -460,16 +460,18 @@ def broll_pick(text, total, seed, settings=None, searches=None, need=None, avoid
     settings = settings or {}
     need = need or max(1, round(total / CLIP_LEN))
     avoid = set(avoid) | recently_used()
-    if searches:
+    if searches and settings.get("stock", False):
         clips, warn = stock_for(searches, need, settings, avoid)
         if len(clips) >= need:
             return clips, warn
         if clips:
             return [clips[i % len(clips)] for i in range(need)], warn + ["not enough stock, some clips repeat"]
     else:
-        warn = ["plan.txt has no b-roll searches for this jam, guessed from the words (expect weaker footage)"]
+        warn = []
     # Old way: guess topics from the words, pick by file name.
-    if settings.get("pixabay_key"):
+    if not settings.get("stock", False):
+        pass
+    elif settings.get("pixabay_key"):
         fetch_stock(topics_for(text), settings["pixabay_key"], provider="pixabay")
     elif settings.get("pexels_key"):
         fetch_stock(topics_for(text), settings["pexels_key"], provider="pexels")
