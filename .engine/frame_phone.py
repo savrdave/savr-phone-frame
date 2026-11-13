@@ -197,7 +197,7 @@ def make_status_bar(path, W, H, bg_hex, args, workdir):
     r, g, b = int(bg_hex[2:4], 16), int(bg_hex[4:6], 16), int(bg_hex[6:8], 16)
     light_bg = (0.299 * r + 0.587 * g + 0.114 * b) > 150
     fg = (0, 0, 0) if light_bg else (255, 255, 255)
-    buf = bytearray([r, g, b, 255] * (W * H))       # solid background = hides the red dot
+    buf = bytearray([r, g, b, 0] * (W * H))         # transparent: the cover underneath hides the red dot
     mid = H / 2 + 2 * s                             # icon centre line
     # signal bars (4)
     bw, gap = 3 * s, 1.6 * s
@@ -236,6 +236,19 @@ def make_status_bar(path, W, H, bg_hex, args, workdir):
     run(cmd)
 
 
+def fmt_is_video(fmt):
+    return fmt != "png"
+
+
+def auto_statusbar_pct(w, h):
+    """How much of the top to replace. Notch iPhones (X to 14, non-Pro 15/16 with 390pt width and
+    2532/2778/2340/2436/2688 tall) have a shorter status bar than Dynamic Island phones, and apps put
+    content right under it, so 6.4% there cuts off the app (the logo in the drawer)."""
+    if h in (2340, 2436, 2532, 2688, 2778):
+        return 4.6
+    return 6.4
+
+
 def process(video, args, bez, outdir, workdir):
     vw, vh, fps, dur, has_audio = probe(video)
     start = args.trim_start
@@ -248,7 +261,8 @@ def process(video, args, bez, outdir, workdir):
     filters = []
     sb_png = None
     if args.statusbar != "none":
-        sb_h = int(round(vh * args.statusbar_pct / 100))
+        pct = args.statusbar_pct or auto_statusbar_pct(vw, vh)
+        sb_h = int(round(vh * pct / 100))
         colour = args.statusbar_colour or statusbar_colour(video, sb_h, workdir, at=start + 0.2)
         if args.statusbar == "fake":
             sb_png = Path(workdir) / f"statusbar_{vw}x{sb_h}.png"
@@ -262,10 +276,31 @@ def process(video, args, bez, outdir, workdir):
 
     pre = ""
     if sb_png:
-        pre = "[0:v][3:v]overlay=0:0:format=auto[sbv];"
+        # Cover the real status bar with the app row just below it, stretched up, every frame.
+        # The cover follows the app (white drawer, grey scrim, cream home) instead of one fixed colour.
+        pre = (f"[0:v]split[v0][v1];"
+               f"[v1]crop=iw:2:0:{sb_h + 4},scale=iw:{sb_h}:flags=neighbor[fill];"
+               f"[v0][fill]overlay=0:0[cov];"
+               f"[cov][3:v]overlay=0:0:format=auto:shortest=1[sbv];")
         src = "[sbv]"
     else:
         src = "[0:v]"
+    in_len = length
+    end_in = []
+    if getattr(args, "end_card", False) and fmt_is_video(args.format):
+        # One system: the SAVR end card goes straight onto the framed video,
+        # frozen on the exact last screen of the trimmed recording.
+        import make_cutscene as mc
+        at = max(0.0, start + length - 1.0 / fps)
+        end = mc.screen_cutscene(video, at, workdir, args)
+        idx = 4 if sb_png else 3
+        end_in = ["-i", str(end)]
+        pre += (f"{src}fps={mc.FPS},scale={vw}:{vh},setsar=1,format=rgba[main];"
+                f"[{idx}:v]fps={mc.FPS},scale={vw}:{vh},setsar=1,format=rgba[endc];"
+                f"[main][endc]concat=n=2:v=1:a=0[cat];")
+        src = "[cat]"
+        fps = mc.FPS
+        length += mc.DUR
     graph = (
         pre +
         f"{src}{','.join(filters)}[scr];"
@@ -286,12 +321,13 @@ def process(video, args, bez, outdir, workdir):
     graph += "[out]"
 
     ext = {"prores": ".mov", "hevc": ".mov", "webm": ".webm", "png": ".png", "mp4": ".mp4"}[fmt]
-    out = outdir / f"{video.stem}_framed{ext}"
+    out = outdir / f"{getattr(args, 'out_stem', None) or video.stem + '_framed'}{ext}"
 
-    cmd = [FFMPEG, "-y", "-v", "error", "-ss", f"{start}", "-t", f"{length}", "-i", str(video),
+    cmd = [FFMPEG, "-y", "-v", "error", "-ss", f"{start}", "-t", f"{in_len}", "-i", str(video),
            "-loop", "1", "-i", str(args.bezel), "-loop", "1", "-i", str(bez["mask"])]
     if sb_png:
         cmd += ["-loop", "1", "-i", str(sb_png)]
+    cmd += end_in
     cmd += ["-filter_complex", graph, "-map", "[out]"]
     if fmt == "png":
         cmd += ["-frames:v", "1"]
@@ -333,17 +369,23 @@ def main():
     p.add_argument("--time", default="9:41", help="time shown in the fake status bar (default 9:41)")
     p.add_argument("--network", default="5G", help="network label, e.g. 5G, LTE, 5G+ (default 5G)")
     p.add_argument("--battery", type=int, default=85, help="battery level %% in the fake status bar (default 85)")
-    p.add_argument("--statusbar-pct", type=float, default=6.4, help="status bar height as %% of video height (default 6.4)")
+    p.add_argument("--statusbar-pct", type=float, default=None, help="status bar height as %% of video height (default: auto, 4.6 on notch iPhones, 6.4 on Dynamic Island)")
     p.add_argument("--statusbar-colour", help="force the cover colour, e.g. 0xffffff (default: auto-sampled)")
     p.add_argument("--trim-start", type=float, default=0.0, help="seconds to cut from the start (e.g. Control Center closing)")
     p.add_argument("--trim-end", type=float, default=0.0, help="seconds to cut from the end")
     p.add_argument("--height", type=int, help="scale output to this height in px (default: bezel size)")
     p.add_argument("--audio", action="store_true", help="keep the recording's audio (off by default)")
     p.add_argument("--move-done", action="store_true", help="move processed inputs into a 'done' folder")
+    p.add_argument("--done-dir", help="where processed inputs go (default: <input>/done)")
+    p.add_argument("--dated-names", action="store_true", help="name outputs <date> <label>")
+    p.add_argument("--end-card", action="store_true", help="put the SAVR end card on the end (frozen on the last screen)")
     args = p.parse_args()
 
     global FFMPEG, FFPROBE
     FFMPEG, FFPROBE = tool("ffmpeg"), tool("ffprobe")
+    if args.dated_names:  # the button run, not an internal call
+        import paths
+        paths.auto_clean()
 
     src = Path(args.input)
     videos = sorted(f for f in src.iterdir() if f.suffix.lower() in VIDEO_EXT) if src.is_dir() else [src]
@@ -354,12 +396,24 @@ def main():
     with tempfile.TemporaryDirectory() as wd:
         bez = analyse_bezel(args.bezel, wd)
         print(f"Bezel screen area: {bez['w']}x{bez['h']} at ({bez['x']},{bez['y']}) in {bez['W']}x{bez['H']}")
+        import paths
         for v in videos:
             print(f"- {v.name}")
+            if args.dated_names:
+                label = paths.ask_label(v)
+                args.out_stem = paths.unique_stem(outdir, f"{paths.today()} {label}")
             process(v, args, bez, outdir, wd)
+            if args.dated_names:
+                paths.log_framed(args.out_stem, v.name)
             if args.move_done and src.is_dir():
-                done = src / "done"; done.mkdir(exist_ok=True)
-                shutil.move(str(v), done / v.name)
+                if args.done_dir:
+                    moved = paths.move_original(v, args.done_dir,
+                                                new_stem=f"{args.out_stem} (original)" if args.dated_names else None)
+                    if args.dated_names:
+                        paths.log_framed(args.out_stem, moved.name)
+                else:
+                    done = src / "done"; done.mkdir(exist_ok=True)
+                    shutil.move(str(v), done / v.name)
 
 
 if __name__ == "__main__":

@@ -1,8 +1,15 @@
-inbox/
-out/
-test/
-__pycache__/
 .DS_Store
-bin/ffmpeg
-bin/ffprobe
-bezels/*.png
+__pycache__/
+DROP HERE/
+FINISHED/
+ORIGINALS/
+.engine/_old/
+.engine/.venv-jam/
+.engine/.work/
+.engine/framed_log.json
+.engine/bin/ffmpeg
+.engine/bin/ffprobe
+B-ROLL/
+READY/
+POSTED/
+.engine/keys.json

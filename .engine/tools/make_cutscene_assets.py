@@ -17,13 +17,13 @@ OUT = HERE / "assets" / "cutscene"
 FPS, DUR = 30, 4.0
 CW, CH = 900, 1500          # canvas; the icon rests centred at (CW/2, REST_Y)
 REST_Y = 1000
-ICON = 380                  # resting icon size on the canvas
+ICON = 440                  # resting icon size on the canvas
 TOSS = 470                  # how high the coin flip goes (px)
 
 # timeline (seconds)
-POP0, POP1 = 1.15, 1.50
-TOSS0, TOSS1 = 1.62, 2.55
-SHINE0, SHINE1 = 2.90, 3.45
+POP0, POP1 = 0.85, 1.15
+TOSS0, TOSS1 = 1.30, 2.28
+SHINE0, SHINE1 = 2.70, 3.25
 
 
 def clamp(x, a=0.0, b=1.0): return max(a, min(b, x))
@@ -34,15 +34,13 @@ def ease_out_back(p, s=2.2):
 
 
 def load_icon(path):
+    # square app icon (savr-icon-app.png: basket on white); cut the iOS rounded corners
     im = Image.open(path).convert("RGBA")
     n = im.width
-    a = np.asarray(im.convert("RGB")).astype(int)
-    # find the corner radius: walk the diagonal until the pixel stops being white
-    d = next(i for i in range(n // 2) if a[i, i].sum() < 3 * 235)
-    r = d / (1 - 1 / math.sqrt(2)) + 2
+    r = n * 0.2237
     ss = 4
     m = Image.new("L", (n * ss, n * ss), 0)
-    inset = 3 * ss
+    inset = 0
     ImageDraw.Draw(m).rounded_rectangle([inset, inset, n * ss - inset, n * ss - inset], radius=r * ss, fill=255)
     im.putalpha(m.resize((n, n), Image.LANCZOS))
     return im
@@ -127,8 +125,8 @@ def glow():
     d = np.hypot(xx - n / 2, yy - n / 2) / (n / 2)
     a = np.clip(1 - d, 0, 1) ** 2.2
     img = np.zeros((n, n, 4), np.uint8)
-    img[..., 0], img[..., 1], img[..., 2] = 120, 205, 125   # SAVR light green
-    img[..., 3] = (a * 210).astype(np.uint8)
+    img[..., 0], img[..., 1], img[..., 2] = 255, 255, 255     # white spotlight
+    img[..., 3] = (a * 120).astype(np.uint8)
     Image.fromarray(img, "RGBA").save(OUT / "glow.png")
 
 
@@ -136,7 +134,7 @@ def main():
     OUT.mkdir(parents=True, exist_ok=True)
     front = load_icon(sys.argv[1]).resize((ICON, ICON), Image.LANCZOS)
     back = front.copy()
-    rgb = np.asarray(back.convert("RGB"), float) * 0.6
+    rgb = np.asarray(back.convert("RGB"), float) * 0.72
     back = Image.fromarray(rgb.astype(np.uint8)).convert("RGBA"); back.putalpha(front.getchannel("A"))
     glow()
     ff = subprocess.Popen(["ffmpeg", "-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", "rgba",

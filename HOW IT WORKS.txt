@@ -1,0 +1,34 @@
+SAVR VIDEO MACHINE
+
+THE ONE FLOW
+1. Claude plans the week and puts plan.txt in DROP HERE. It lists every jam,
+   what it needs on screen, and the hook.
+2. Recording session. Say "jam 7", talk, "jam 8", talk, all in one voice memo.
+   For jams marked "screen", screen record SAVR in the same order as the jams.
+3. Drop the voice memo in DROP HERE/voice memos and the screen recordings in
+   DROP HERE/screen recordings. Don't rename anything.
+4. Double-click Make Jam. Finished videos land in READY with captions, visuals,
+   hook and the SAVR end card. Named from the hook.
+5. Post it, then drag it into POSTED.
+
+FOLDERS YOU TOUCH
+DROP HERE    things going in
+READY        finished, not posted yet
+POSTED       posted. Goes to the Trash by itself after 30 days.
+
+FOLDERS YOU DON'T NEED TO OPEN
+ORIGINALS    your raw voice memos and screen recordings. Kept forever.
+B-ROLL       your clips + free stock from Pixabay (B-ROLL/stock). Picked automatically.
+FINISHED     working files. Go to the Trash by themselves after 30 days.
+
+OTHER BUTTONS
+Frame Videos   a screen recording in an iPhone, end card on the end. For editing by hand in CapCut.
+Voice Only     puts your voice preset on audio you already edited in Descript.
+Voice Test     hear your voice in every preset.
+
+PLAN.TXT LINES
+07 | screen | Grocery prices are up 33% since 2020
+08 | broll  | Points aren't saving you money
+09 | headlines+screen | Every headline says prices went up
+broll = automatic. screen = your next screen recording. headlines = files in
+DROP HERE/visuals starting with the jam number ("09 a.png").

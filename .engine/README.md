@@ -1,3 +1,13 @@
+> **Folder layout (Nov 7, 2026):** the top folder only shows the 4 buttons plus `DROP HERE/` (inputs),
+> `FINISHED/` (outputs, auto-named `<date>_framedNN`, `<date>_framedNN_cutscene_*`, `<date>_jamNN`) and
+> `ORIGINALS/` (used inputs, never overwritten). All code lives in this hidden `.engine/` folder.
+> **Nov 10:** framed videos are named `<date> <what it shows>.mov`. If the recording still has the iPhone name,
+> Frame Videos shows it and asks for 2 to 4 words (Enter skips). Rename the recording first and it uses that name.
+> The original moves to ORIGINALS as `<same name> (original).mov`. **Tidy Up.command** moves anything older than
+> 2 weeks into `older/<month>` folders. Nothing is ever deleted. The status bar size now matches the phone
+> (notch phones get a shorter cover) and the cover follows the app frame by frame.
+> Paths below that mention `inbox/` and `out/` are from before the move. See `paths.py`.
+
 # SAVR phone frame
 
 Turns an iPhone screen recording into a video of a real iPhone with the recording playing inside it, on a transparent background. The status bar is replaced with a clean one (9:41, full signal, 5G, 85% battery), so the red recording dot is gone.
@@ -50,7 +60,7 @@ By default `frame.sh` trims 0.5 sec off each end, which cuts the Control Center 
 ## Cutscene (end card)
 
 Double-click **Make Cutscene.command**, drag in the screen recording your video ends on, give it a name (e.g. `montage-A`).
-It freezes on the exact last screen of the framed video, then: screen dims and recedes, green spotlight, SAVR icon pops in,
+It freezes on the exact last screen of the framed video, then: screen recedes and fades to black, spotlight, SAVR app icon pops in,
 coin-flips twice, lands with a flash, shine sweep, holds. 4 seconds.
 
 Results land in `out/cutscenes/`, named `<date>_<name>_cutscene_capcut.mov` (transparent, CapCut) and
