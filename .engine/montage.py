@@ -90,7 +90,13 @@ def jam_files(n):
 
 
 def read_plan():
-    """{jam number: {"type": "screen", "hook": "..."}} from DROP HERE/plan.txt."""
+    """DROP HERE/plan.txt, one line per jam:
+        07 | screen | Grocery prices are up 33% since 2020
+        08 | broll | Points aren't saving you money | loyalty card checkout; receipt closeup
+        09 | headlines2+screen | Every headline says prices went up
+    -> {7: {"type": "screen", "hook": "...", "searches": [], "headlines": 0}, ...}
+    The 4th part (b-roll searches, separated by ;) is written by Claude when planning.
+    'headlines2' = the next 2 screenshots go to this jam ('headlines' alone = 1)."""
     plan = {}
     p = paths.DROP / "plan.txt"
     if not p.exists():
@@ -100,23 +106,70 @@ def read_plan():
         m = re.match(r"(?:jam\s*)?0*(\d+)$", parts[0].lower()) if parts else None
         if not m:
             continue
-        plan[int(m.group(1))] = {"type": (parts[1].lower() if len(parts) > 1 else "broll"),
-                                 "hook": parts[2] if len(parts) > 2 else ""}
+        kind = parts[1].lower().replace(" ", "") if len(parts) > 1 and parts[1] else "broll"
+        h = re.search(r"headlines?:?(\d*)", kind)
+        searches = parts[3] if len(parts) > 3 else ""
+        searches = re.sub(r"^(stock|broll|b-roll)\s*:\s*", "", searches, flags=re.I)
+        plan[int(m.group(1))] = {"type": kind, "hook": parts[2] if len(parts) > 2 else "",
+                                 "searches": [q.strip() for q in searches.split(";") if q.strip()],
+                                 "headlines": (int(h.group(1) or 1) if h else 0)}
     return plan
 
 
+def taken_order(f):
+    """When a file was recorded or taken, not when it was copied over (AirDrop
+    resets that). Video: creation_time tag. Image: EXIF date, else the IMG_ number."""
+    try:
+        if f.suffix.lower() in VIDEO_EXT:
+            out = json.loads(run(["ffprobe", "-v", "error", "-show_entries", "format_tags=creation_time",
+                                  "-of", "json", str(f)]))
+            t = out.get("format", {}).get("tags", {}).get("creation_time")
+            if t:
+                return (0, t, f.name)
+        else:
+            from PIL import Image
+            with Image.open(f) as im:
+                t = (im.getexif().get(36867) or im.getexif().get(306) or "")
+            if t:
+                t = t.replace(":", "-", 2).replace(" ", "T")
+                return (0, t, f.name)
+    except Exception:
+        pass
+    m = re.search(r"(\d{3,})", f.stem)
+    return (1, m.group(1).zfill(12) if m else "", f.name)
+
+
+def _queued(folder, exts):
+    return sorted([f for f in folder.iterdir() if f.suffix.lower() in exts and not f.name.startswith(".")],
+                  key=taken_order) if folder.exists() else []
+
+
 def assign_screens(jam_numbers, plan):
-    """Screen recordings in DROP HERE/screen recordings, oldest first, go to the
-    jams the plan marks 'screen', lowest jam number first."""
-    folder = paths.SCREEN_IN
-    recs = sorted([f for f in folder.iterdir() if f.suffix.lower() in VIDEO_EXT],
-                  key=lambda f: f.stat().st_mtime) if folder.exists() else []
+    """Screen recordings, in the order recorded, go to the jams the plan marks
+    'screen', lowest jam number first."""
+    recs = _queued(paths.SCREEN_IN, VIDEO_EXT)
     wants = [n for n in sorted(jam_numbers) if "screen" in plan.get(n, {}).get("type", "")]
     out = dict(zip(wants, recs))
     for n in wants[len(recs):]:
         print(f"  jam {n:02d} needs a screen recording but there's none left, using b-roll")
     if len(recs) > len(wants) and wants:
         print(f"  {len(recs) - len(wants)} screen recording(s) left over, not used")
+    return out
+
+
+def assign_shots(jam_numbers, plan):
+    """Screenshots, in the order taken, go to the jams the plan marks 'headlines'."""
+    shots = _queued(paths.SHOTS_IN, IMAGE_EXT)
+    out, k = {}, 0
+    for n in sorted(jam_numbers):
+        want = plan.get(n, {}).get("headlines", 0)
+        if want:
+            out[n] = shots[k:k + want]
+            if len(out[n]) < want:
+                print(f"  jam {n:02d} wanted {want} screenshot(s), only {len(out[n])} left")
+            k += want
+    if k < len(shots) and k:
+        print(f"  {len(shots) - k} screenshot(s) left over, not used")
     return out
 
 
@@ -206,11 +259,13 @@ def framed(src, work):
 
 # --------------------------------------------------------------- b-roll
 
-# ---------------------------------------------------------- Pexels stock
-# Free stock footage (pexels.com licence: free to use, no credit needed).
-# Put your free key in jam_settings.json as "pexels_key". Clips are fetched once
-# per topic, trimmed to 6 seconds, and kept in B-ROLL/stock.
+# ----------------------------------------------------------- stock b-roll
+# Free stock footage from Pixabay (Pexels as a fallback). Key goes in
+# .engine/keys.json as "pixabay_key" (never uploaded). Clips are trimmed to 6
+# seconds and kept in B-ROLL/stock. Best case: plan.txt names the searches for
+# each jam (Claude writes them when planning), so footage fits what's said.
 STOCK = BROLL / "stock"
+USED = STOCK / ".used.json"   # clip -> date last used, so videos don't repeat footage
 SEARCHES = {
     "price tag": "grocery price tag",
     "produce": "grocery store produce",
@@ -233,11 +288,12 @@ def _curl(args):
     return r.stdout if r.returncode == 0 else None
 
 
-def _search(provider, key, topic):
+def _search(provider, key, topic, page=1):
     """[(id, url)] for one topic. Vertical clips first, then wide ones (cropped to 9:16)."""
-    q = SEARCHES[topic].replace(" ", "+")
+    q = (SEARCHES.get(topic) or topic).replace(" ", "+")
     if provider == "pixabay":
-        raw = _curl([f"https://pixabay.com/api/videos/?key={key}&q={q}&per_page=30&safesearch=true"])
+        raw = _curl([f"https://pixabay.com/api/videos/?key={key}&q={q}&per_page=50&page={page}"
+                     f"&safesearch=true&video_type=film"])
         if not raw:
             return None
         found = []
@@ -284,27 +340,73 @@ def fetch_stock(topics, key, per_topic=4, provider="pixabay"):
         got = 0
         for vid, link in results:
             dest = STOCK / f"{topic} - {provider} {vid}.mp4"
-            best = {"link": link}
-            if not dest.exists():
-                tmp = STOCK / f".dl_{vid}.mp4"
-                data = _curl([best["link"]])
-                if not data:
-                    continue
-                tmp.write_bytes(data)
-                try:
-                    run(["ffmpeg", "-y", "-v", "error", "-ss", "0.5", "-i", str(tmp), "-t", "6",
-                         "-vf", f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},fps={FPS}",
-                         "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-pix_fmt", "yuv420p",
-                         str(dest)])
-                except SystemExit:
-                    pass
-                tmp.unlink(missing_ok=True)
-            got += 1
+            if dest.exists() or _download(link, dest):
+                got += 1
             if got >= per_topic:
                 break
-        done[f"{provider}:{topic}"] = got
-        done_file.write_text(json.dumps(done, indent=1))
+        if got:  # an empty or failed fetch gets retried next time
+            done[f"{provider}:{topic}"] = got
+            done_file.write_text(json.dumps(done, indent=1))
         print(f"  {provider}: {got} clip(s) for '{topic}'")
+
+
+def _slug(q):
+    return re.sub(r"[^a-z0-9]+", " ", q.lower()).strip()[:40]
+
+
+def _download(link, dest):
+    tmp = dest.with_name(f".dl_{dest.stem}.mp4")
+    data = _curl([link])
+    if not data:
+        return False
+    tmp.write_bytes(data)
+    try:
+        run(["ffmpeg", "-y", "-v", "error", "-ss", "0.5", "-i", str(tmp), "-t", "6",
+             "-vf", f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},fps={FPS}",
+             "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-pix_fmt", "yuv420p", str(dest)])
+    except SystemExit:
+        dest.unlink(missing_ok=True)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return dest.exists()
+
+
+def stock_for(searches, need, settings, avoid):
+    """Clips for the searches Claude put in plan.txt: up to `need` in total, fresh
+    ones fetched when the folder doesn't have enough unused ones."""
+    key = settings.get("pixabay_key")
+    provider = "pixabay" if key else ("pexels" if settings.get("pexels_key") else None)
+    key = key or settings.get("pexels_key")
+    STOCK.mkdir(parents=True, exist_ok=True)
+    per = max(2, -(-need // len(searches)) + 1)
+    picked, warn = [], []
+    for q in searches:
+        slug = _slug(q)
+        have = sorted(f for f in STOCK.glob(f"q {slug} - *.mp4") if f not in avoid)
+        if len(have) < per and provider:
+            results = _search(provider, key, q) or []
+            if not results and len(q.split()) > 2:
+                results = _search(provider, key, " ".join(q.split()[-2:])) or []
+            for vid, link in results:
+                if len(have) >= per:
+                    break
+                dest = STOCK / f"q {slug} - {provider} {vid}.mp4"
+                if dest.exists() or _download(link, dest):
+                    if dest not in have and dest not in avoid:
+                        have.append(dest)
+        if not have:
+            warn.append(f"no stock found for '{q}'")
+        picked.append(have[:per])
+    if not provider:
+        warn.append("no pixabay_key in .engine/keys.json, using clips already downloaded")
+    # Blocks in plan order (Claude lists searches in the order the script goes),
+    # each search getting its share; short ones are topped up from the others.
+    base, extra = divmod(need, len(searches))
+    quota = [base + (1 if k < extra else 0) for k in range(len(searches))]
+    out = [c for g, q in zip(picked, quota) for c in g[:q]]
+    spare = [c for g, q in zip(picked, quota) for c in g[q:]]
+    out += spare[:need - len(out)]
+    return out, warn
 
 
 def topics_for(text):
@@ -313,16 +415,48 @@ def topics_for(text):
     return hits or ["shelf", "price tag", "cart"]
 
 
-def broll_pick(text, total, seed, settings=None):
+def recently_used(days=14):
+    import datetime
+    log = json.loads(USED.read_text()) if USED.exists() else {}
+    cutoff = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
+    return {STOCK / k for k, d in log.items() if d >= cutoff}
+
+
+def mark_used(clips):
+    import datetime
+    log = json.loads(USED.read_text()) if USED.exists() else {}
+    for c in clips:
+        if c.parent == STOCK:
+            log[c.name] = datetime.date.today().isoformat()
+    STOCK.mkdir(parents=True, exist_ok=True)
+    USED.write_text(json.dumps(log, indent=1))
+
+
+def broll_pick(text, total, seed, settings=None, searches=None, need=None, avoid=()):
+    """Returns (clips, warnings)."""
     settings = settings or {}
+    need = need or max(1, round(total / CLIP_LEN))
+    avoid = set(avoid) | recently_used()
+    if searches:
+        clips, warn = stock_for(searches, need, settings, avoid)
+        if len(clips) >= need:
+            return clips, warn
+        if clips:
+            return [clips[i % len(clips)] for i in range(need)], warn + ["not enough stock, some clips repeat"]
+    else:
+        warn = ["plan.txt has no b-roll searches for this jam, guessed from the words (expect weaker footage)"]
+    # Old way: guess topics from the words, pick by file name.
     if settings.get("pixabay_key"):
         fetch_stock(topics_for(text), settings["pixabay_key"], provider="pixabay")
     elif settings.get("pexels_key"):
         fetch_stock(topics_for(text), settings["pexels_key"], provider="pexels")
+    own = settings.get("use_own_broll", False)
     clips = [f for f in BROLL.rglob("*") if f.suffix.lower() in VIDEO_EXT and not f.name.startswith(".")
-             and not f.name.lower().startswith("face")] if BROLL.exists() else []
+             and not f.name.lower().startswith("face") and (own or f.parent == STOCK)] if BROLL.exists() else []
+    fresh = [c for c in clips if c not in avoid]
+    clips = fresh if len(fresh) >= need else clips
     if not clips:
-        return []
+        return [], warn
     said = set(re.findall(r"[a-z$]+", text.lower()))
     def score(f):
         name = f.stem.lower()
@@ -336,40 +470,61 @@ def broll_pick(text, total, seed, settings=None):
     rng = random.Random(seed)
     rng.shuffle(clips)
     clips.sort(key=score, reverse=True)
-    n = max(1, round(total / CLIP_LEN))
+    n = need
     # best matches first, but mixed up so the video doesn't go topic by topic
     pool = clips[:max(n, 6)]
     rng.shuffle(pool)
-    return [pool[i % len(pool)] for i in range(n)]
+    return [pool[i % len(pool)] for i in range(n)], warn
 
 
 # ----------------------------------------------------------------- build
 
-def build_background(n, total, text, settings, work, screen=None):
-    """Returns (video path or None, last screen recording used or None, description)."""
+def build_background(n, total, text, settings, work, screen=None, shots=(), entry=None, durs=None, used=None):
+    """Returns (video path or None, last screen recording used or None, description, warnings).
+    Order on screen: files named with the jam number, then headline screenshots,
+    then the screen recording. Nothing given -> b-roll."""
+    entry, used = entry or {}, used if used is not None else set()
+    warn = []
     files = [f for f in jam_files(n) if f.suffix.lower() in VIDEO_EXT | IMAGE_EXT]
+    files += list(shots)
     if screen:
         files.append(screen)
+    if "screen" in entry.get("type", "") and not screen:
+        warn.append("plan wanted a screen recording, none was left")
+    if entry.get("headlines") and len(shots) < entry["headlines"]:
+        warn.append(f"plan wanted {entry['headlines']} screenshot(s), got {len(shots)}")
     if not files:
         if settings.get("jams", {}).get(str(n), {}).get("background") or settings.get("default_background"):
-            return None, None, "background from settings"
+            return None, None, "background from settings", warn
         if settings.get("auto_broll", True):
-            files = broll_pick(text, total, seed=n, settings=settings)
+            need = len(durs) if durs else None
+            files, w = broll_pick(text, total, seed=n, settings=settings,
+                                  searches=entry.get("searches"), need=need, avoid=used)
+            warn += w
             if not files:
-                return None, None, "SAVR green (B-ROLL folder is empty)"
+                return None, None, "SAVR green (no b-roll found)", warn + ["no b-roll at all, plain green"]
+            used.update(files)
+            mark_used(files)
             mode = "broll"
         else:
-            return None, None, "SAVR green"
+            return None, None, "SAVR green", warn
     else:
         mode = "visuals"
     segdir = work / "segments"
     if segdir.exists():
         shutil.rmtree(segdir)
     segdir.mkdir(parents=True)
-    share = total / len(files)
+    if mode == "broll" and durs and len(durs) == len(files):
+        lengths = durs
+    elif screen and len(files) > 1:
+        # headlines/images flash by (up to 2.5s each), the app gets the rest
+        each = min(2.5, total * 0.5 / (len(files) - 1))
+        lengths = [each] * (len(files) - 1) + [total - each * (len(files) - 1)]
+    else:
+        lengths = [total / len(files)] * len(files)
     parts, last_rec = [], None
     for k, f in enumerate(files):
-        dur = share if k < len(files) - 1 else total - share * k
+        dur = lengths[k] if k < len(files) - 1 else total - sum(lengths[:-1])
         dest = segdir / f"{k:03d}.mp4"
         if f.suffix.lower() in IMAGE_EXT:
             seg_image(f, dur, dest)
@@ -388,7 +543,7 @@ def build_background(n, total, text, settings, work, screen=None):
     out = work / "visuals.mp4"
     run(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", str(out)])
     names = ", ".join(f.stem for f in files[:4]) + (" ..." if len(files) > 4 else "")
-    return out, last_rec, f"{mode}: {names}"
+    return out, last_rec, f"{mode}: {names}", warn
 
 
 def hook_png(text, work):

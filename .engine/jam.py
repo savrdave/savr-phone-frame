@@ -48,8 +48,10 @@ DEFAULTS = {
     "voice": "natural",
     "whisper_model": "small.en",
     "silence_db": "auto",    # or a number like -40
-    "min_pause": 0.25,       # pauses longer than this get cut down
-    "keep_pause": 0.34,      # how much of each cut pause is left in
+    "min_pause": 0.5,        # pauses longer than this get cut down (was 0.25: too breathless)
+    "keep_pause": 0.42,      # how much of each cut pause is left in
+    "restart_gap": 0.45,     # a pause this long ends a phrase, for spotting restarted sentences
+    "use_own_broll": False,  # your own B-ROLL clips only get picked when this is true
     "caption_max_words": 3,
     "caption_max_chars": 18,
     "caption_y": 0.62,
@@ -173,7 +175,7 @@ def speech_intervals(x, s):
     db = 20 * np.log10(rms)
     if s["silence_db"] == "auto":
         floor = np.percentile(db, 10)
-        thr = float(np.clip(floor + 14, -55, -30))
+        thr = float(np.clip(floor + 10, -58, -34))  # gentler: keeps soft word endings
     else:
         thr = float(s["silence_db"])
     voiced = db > thr
@@ -216,7 +218,11 @@ class Timeline:
 # ---------------------------------------------------------- transcription
 
 _MODEL = {}
-PROMPT = "Jam one. Again. Jam two. I use SAVR to compare grocery prices. Comment if you want the list."
+# Written with false starts and ums on purpose: Whisper copies the style of the
+# prompt, so this keeps it from silently "cleaning up" a restarted sentence
+# (if the first attempt isn't in the transcript, it can't be cut).
+PROMPT = ("Jam one. Um, grocery prices are up, uh... Grocery prices are up 33% since 2020. "
+          "I use, I use SAVR to compare prices. Again. Jam two.")
 
 
 def get_model(name):
@@ -379,7 +385,8 @@ def drop_restarts(words, tl=None):
                     a = [norm(w["w"]) for w in out[i:j]]
                     b = [norm(w["w"]) for w in out[j:j + d + 1]]
                     shared = sum(min(a.count(x), b.count(x)) for x in set(a))
-                    ok = shared / d >= 0.6
+                    pause = orig(out[j]["s"]) - orig(out[j - 1]["e"])
+                    ok = shared / d >= 0.6 and pause >= 0.3  # needs a pause, or real lines get eaten
                 if ok:
                     del out[i:j]
                     changed = True
@@ -389,18 +396,69 @@ def drop_restarts(words, tl=None):
     return out
 
 
+def drop_sentence_restarts(words, tl=None, gap=0.45):
+    """Restarted sentences, the way you actually do it:
+        'Grocery prices are up thirty... Grocery prices are up 33% since 2020.'
+    keeps only the second. Phrases are split on pauses in the original recording.
+    The earlier phrase is a false start when the next one opens with the same
+    two words and the earlier one either trails off (no full stop) or mostly
+    repeats the next one. A short stub (3 words or less) followed by a phrase
+    with the same first word also counts. Chains work: the last attempt wins."""
+    if len(words) < 3:
+        return words
+
+    def orig(t):
+        return tl.to_orig(t) if tl else t
+
+    phrases, cur = [], [words[0]]
+    for prev, w in zip(words, words[1:]):
+        if orig(w["s"]) - orig(prev["e"]) >= gap:
+            phrases.append(cur)
+            cur = []
+        cur.append(w)
+    phrases.append(cur)
+    keep = []
+    for k, ph in enumerate(phrases):
+        if k + 1 < len(phrases):
+            a = [x for x in (norm(w["w"]) for w in ph) if x]
+            b = [x for x in (norm(w["w"]) for w in phrases[k + 1]) if x]
+            if a and b:
+                ended = ph[-1]["w"].rstrip()[-1:] in ".?!"
+                overlap = sum(min(a.count(x), b.count(x)) for x in set(a)) / len(a)
+                if len(a) >= 2 and a[:2] == b[:2] and (not ended or overlap >= 0.6):
+                    continue
+                if len(a) <= 3 and a[0] == b[0] and not ended:
+                    continue
+        keep.extend(ph)
+    return keep
+
+
 def plan_cuts(take, total_len, s, tl=None):
     joins = [float(j) for j in tl.offsets[1:]] if tl else []
     pos = {id(w): k for k, w in enumerate(take)}
     words = [w for w in take if norm(w["w"]) not in FILLERS]
     words = drop_restarts(words, tl)
+    words = drop_sentence_restarts(words, tl, s.get("restart_gap", 0.45))
+    if not words:
+        raise ValueError("nothing left after cutting restarts")
+    kept_ids = {id(w) for w in words}
+    removed = [w["w"] for w in take if id(w) not in kept_ids]
+    # Audio Whisper didn't write down (often a mumbled first attempt) shows up as
+    # a gap between two words that's longer than any pause we left in. Cut it.
+    gap_cut = s["keep_pause"] + 0.3
     pad_b, pad_a = 0.12, 0.25
-    intervals, j = [], 0
+    intervals, j, gaps = [], 0, []
     a = max(0.0, words[0]["s"] - pad_b)
     for prev, nxt in zip(words, words[1:]):
-        # Anything skipped between two kept words (a restart, a filler) or a
-        # long gap becomes a cut.
         skipped = pos[id(nxt)] != pos[id(prev)] + 1
+        if not skipped and nxt["s"] - prev["e"] > gap_cut:
+            end = prev["e"] + pad_a
+            start = max(end, nxt["s"] - pad_b)
+            gaps.append(round(start - end, 1))
+            intervals.append([a, end])
+            a = start
+            continue
+        # Anything skipped between two kept words (a restart, a filler) becomes a cut.
         if skipped:
             # End where the sound actually stops (keeps the 's' on 'dollars'),
             # or a quarter second after the word if the restart had no pause.
@@ -424,7 +482,20 @@ def plan_cuts(take, total_len, s, tl=None):
             mapped.append({"w": w["w"], "s": ws, "e": min(we, ws + 1.2)})
             j += 1
         offset += ib - ia
-    return intervals, mapped, offset
+    return intervals, mapped, offset, {"words": removed, "gaps": gaps}
+
+
+def visual_cuts(mapped, total, every):
+    """Clip lengths for b-roll that change on a pause between words, not mid-word."""
+    bounds = [(a["e"] + b["s"]) / 2 for a, b in zip(mapped, mapped[1:]) if b["s"] - a["e"] > 0.08]
+    durs, last, t = [], 0.0, every
+    while t < total - every * 0.5:
+        near = [b for b in bounds if abs(b - t) <= 1.2 and b - last >= 1.8]
+        cut = min(near, key=lambda b: abs(b - t)) if near else t
+        durs.append(cut - last)
+        last, t = cut, cut + every
+    durs.append(total - last)
+    return durs
 
 
 # ------------------------------------------------------------------ voice
@@ -615,7 +686,13 @@ def prepare(src, s):
     x = read_wav(full)
     iv, thr = speech_intervals(x, s)
     tight = work / "tight.wav"
-    write_wav(tight, splice(x, iv))
+    # Only rewrite when the recording changed, so the transcript cache stays valid
+    # (redoing failed jams then skips the slow transcription).
+    sig = work / "tight.json"
+    want = json.dumps([iv[0][0], iv[-1][1], len(iv)] if iv else [])
+    if not tight.exists() or not sig.exists() or sig.read_text() != want:
+        write_wav(tight, splice(x, iv))
+        sig.write_text(want)
     kept = sum(b - a for a, b in iv)
     print(f"  {len(x)/SR:.0f}s recorded, {kept:.0f}s after cutting pauses (threshold {thr:.0f} dB)")
     return work, tight, Timeline(iv)
@@ -651,6 +728,74 @@ def voice_only(src, s, voice):
     print(f"  {src.name} -> {dest.relative_to(ROOT)}")
 
 
+def make_one(n, take, x, tl, s, voice, plan, screen, shots, used, date, work):
+    """One jam -> one finished video. Returns a dict for the review sheet."""
+    intervals, mapped, total, cut = plan_cuts(take, len(x) / SR, s, tl)
+    said = clean_text(" ".join(w["w"] for w in mapped))
+    hook = montage.hook_text(n, s, plan)
+    base = unique_base(date, n, hook or said)
+    jdir = work / f"jam{n:02d}"
+    jdir.mkdir(exist_ok=True)
+    raw = jdir / "cut.wav"
+    write_wav(raw, splice(x, intervals))
+    voiced = jdir / f"voice_{voice}.wav"
+    shape_voice(raw, voiced, voice)
+    caps = render_captions(mapped, total, s, jdir)
+    durs = visual_cuts(mapped, total, montage.CLIP_LEN)
+    visuals, last_rec, what, warn = montage.build_background(
+        n, total, said, s, jdir, screen=screen, shots=shots, entry=plan.get(n, {}), durs=durs, used=used)
+    bg = str(visuals) if visuals else s["jams"].get(str(n), {}).get("background", s["default_background"])
+    dest = OUT / f"{base}.mp4"
+    hook_img = montage.hook_png(hook, jdir) if hook else None
+    if s.get("cutscene", True):
+        body = jdir / "body.mp4"
+        render_video(voiced, caps, bg, total, body, hook_img)
+        end = montage.cutscene_for(last_rec, jdir)
+        if end:
+            montage.append_cutscene(body, end, dest)
+            total += montage.probe(end)[2]
+        else:
+            shutil.move(str(body), dest)
+    else:
+        render_video(voiced, caps, bg, total, dest, hook_img)
+    print(f"           visuals: {what}")
+    print(f"  jam {n:02d}  {total:5.1f}s  -> {dest.relative_to(ROOT)}")
+    return {"n": n, "file": dest.name, "secs": total, "hook": hook, "said": said,
+            "cut": cut, "visuals": what, "warn": warn}
+
+
+def review_sheet(src, date, voice, results, failed, planned):
+    """READY/<date> review.md: what each video says, what got cut, what's on screen.
+    Paste it to Claude (or let Claude read it) before posting."""
+    out = [f"# Review: {src.name} ({date}, voice: {voice})\n"]
+    missing = sorted(set(planned) - {r["n"] for r in results} - set(failed))
+    if failed:
+        out.append(f"**FAILED: jam {', '.join(f'{n:02d}' for n in failed)}.** "
+                   "Double-click Make Jam again to redo only these.\n")
+    if missing:
+        out.append(f"**In plan.txt but never heard in the recording: jam "
+                   f"{', '.join(f'{n:02d}' for n in missing)}.** Check you said \"jam N\" clearly.\n")
+    for r in results:
+        out.append(f"## jam {r['n']:02d}  ({r['secs']:.0f}s)  {r['file']}")
+        if r["hook"]:
+            out.append(f"Hook: {r['hook']}")
+        out.append(f"Visuals: {r['visuals']}")
+        for w in r["warn"]:
+            out.append(f"WARNING: {w}")
+        if r["cut"]["words"]:
+            out.append(f"Cut out (restarts, ums): {' '.join(r['cut']['words'])}")
+        if r["cut"]["gaps"]:
+            out.append(f"Cut out (unclear audio, no words): {len(r['cut']['gaps'])} piece(s), "
+                       f"{sum(r['cut']['gaps']):.1f}s")
+        out.append(f"\n{r['said']}\n")
+    name, k = f"{date} review", 1
+    while (OUT / f"{name}.md").exists():
+        k += 1
+        name = f"{date} review {k}"
+    (OUT / f"{name}.md").write_text("\n".join(out))
+    return OUT / f"{name}.md"
+
+
 def process(src, s, voice, args):
     print(f"\n== {src.name}")
     work, tight, tl = prepare(src, s)
@@ -660,52 +805,76 @@ def process(src, s, voice, args):
         print("  Didn't hear any words in that file, skipping.")
         return
     jams = split_jams(words, tl)
+    retry = work / "failed.json"
     if args.only:
         keep = {int(x) for x in args.only.split(",")}
         jams = [j for j in jams if j[0] in keep]
+    elif retry.exists():
+        keep = set(json.loads(retry.read_text()))
+        jams = [j for j in jams if j[0] in keep]
+        print(f"  Redoing only the jams that failed last time: {', '.join(str(n) for n in sorted(keep))}")
     OUT.mkdir(parents=True, exist_ok=True)
     date = datetime.date.today().isoformat()
-    notes = [f"# Jams from {src.name} ({date}, voice: {voice})\n"]
-    print(f"  Found {len(jams)} jam(s): {', '.join(str(n) for n, _ in jams)}")
+    plan = montage.read_plan()
+    nums = [n for n, _ in jams]
+    print(f"  Found {len(jams)} jam(s): {', '.join(str(n) for n in nums)}")
+    if not plan:
+        print("  No plan.txt in DROP HERE: hooks and screen recordings won't be matched to jams.")
+    screens = montage.assign_screens(nums, plan)
+    shots = montage.assign_shots(nums, plan)
     x = read_wav(tight)
+    results, failed, used = [], [], set()
     for n, take in jams:
-        intervals, mapped, total = plan_cuts(take, len(x) / SR, s, tl)
-        said = clean_text(" ".join(w["w"] for w in mapped))
-        hook = montage.hook_text(n, s)
-        base = unique_base(date, n, hook or said)
-        jdir = work / f"jam{n:02d}"
-        jdir.mkdir(exist_ok=True)
-        raw = jdir / "cut.wav"
-        write_wav(raw, splice(x, intervals))
-        voiced = jdir / f"voice_{voice}.wav"
-        shape_voice(raw, voiced, voice)
-        caps = render_captions(mapped, total, s, jdir)
-        visuals, last_rec, what = montage.build_background(n, total, said, s, jdir)
-        bg = str(visuals) if visuals else s["jams"].get(str(n), {}).get("background", s["default_background"])
-        dest = OUT / f"{base}.mp4"
-        hook_img = montage.hook_png(hook, jdir) if hook else None
-        if s.get("cutscene", True):
-            body = jdir / "body.mp4"
-            render_video(voiced, caps, bg, total, body, hook_img)
-            end = montage.cutscene_for(last_rec, jdir)
-            if end:
-                montage.append_cutscene(body, end, dest)
-                total += montage.probe(end)[2]
-            else:
-                shutil.move(str(body), dest)
-        else:
-            render_video(voiced, caps, bg, total, dest, hook_img)
-        print(f"           visuals: {what}")
-        text = clean_text(" ".join(w["w"] for w in mapped))
-        notes.append(f"## {base}  ({total:.0f}s)\n\n{text}\n")
-        print(f"  jam {n:02d}  {total:5.1f}s  -> {dest.relative_to(ROOT)}")
-    tname, k = f"{date}_transcript", 1
-    while (OUT / f"{tname}.md").exists():
-        k += 1
-        tname = f"{date}_transcript-{k}"
-    (OUT / f"{tname}.md").write_text("\n".join(notes))
+        try:
+            r = make_one(n, take, x, tl, s, voice, plan, screens.get(n), shots.get(n, []), used, date, work)
+            results.append(r)
+            # Used screen recordings and screenshots go to ORIGINALS, so a rerun
+            # matches the leftovers to the jams that are left.
+            for f in ([screens[n]] if n in screens else []) + shots.get(n, []):
+                if f.exists():
+                    paths.move_original(f, paths.SCREEN_DONE)
+        except (Exception, SystemExit) as e:
+            failed.append(n)
+            print(f"  jam {n:02d} FAILED: {e}. Carrying on with the rest.")
+    sheet = review_sheet(src, date, voice, results, failed, list(plan) if not retry.exists() else [])
+    print(f"\n  Review sheet: {sheet.relative_to(ROOT)}")
+    if failed:
+        retry.write_text(json.dumps(failed))
+        print(f"  {len(failed)} jam(s) failed. The recording stays in DROP HERE; "
+              "run Make Jam again to redo just those.")
+        return
+    retry.unlink(missing_ok=True)
     if not args.source and src.parent == INBOX:
         paths.move_original(src, DONE)
+
+
+def sort_drop():
+    """Everything can go straight into DROP HERE. Sorted by type before each run:
+    voice memos, screen recordings, screenshots. Files starting with a jam number
+    ('07 a.png') go to visuals, same as before. Subfolders still work too."""
+    if not paths.DROP.exists():
+        return
+    moved = 0
+    for f in paths.DROP.iterdir():
+        if not f.is_file() or f.name.startswith(".") or f.suffix.lower() in (".txt", ".md", ".bak"):
+            continue
+        ext = f.suffix.lower()
+        if re.match(r"(?:jam\s*)?\d+(?!\d)", f.stem.lower()) and ext in montage.VIDEO_EXT | IMAGE_EXT:
+            dest = montage.VISUALS
+        elif ext in montage.VIDEO_EXT:
+            dest = paths.SCREEN_IN
+        elif ext in AUDIO_EXT:
+            dest = INBOX
+        elif ext in IMAGE_EXT:
+            dest = paths.SHOTS_IN
+        else:
+            continue
+        dest.mkdir(parents=True, exist_ok=True)
+        if not (dest / f.name).exists():
+            shutil.move(str(f), dest / f.name)
+            moved += 1
+    if moved:
+        print(f"Sorted {moved} file(s) from DROP HERE.")
 
 
 def main():
@@ -749,6 +918,8 @@ def main():
             if f.parent == paths.DROP / "voice only":
                 paths.move_original(f, paths.ORIGINALS / "voice only")
         return
+    if not args.source:
+        sort_drop()
     sources = pick_sources(args.source)
     print(f"{len(sources)} recording(s) to process.")
     for src in sources:

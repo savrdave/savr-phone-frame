@@ -1,34 +1,56 @@
 SAVR VIDEO MACHINE
 
-THE ONE FLOW
-1. Claude plans the week and puts plan.txt in DROP HERE. It lists every jam,
-   what it needs on screen, and the hook.
-2. Recording session. Say "jam 7", talk, "jam 8", talk, all in one voice memo.
-   For jams marked "screen", screen record SAVR in the same order as the jams.
-3. Drop the voice memo in DROP HERE/voice memos and the screen recordings in
-   DROP HERE/screen recordings. Don't rename anything.
-4. Double-click Make Jam. Finished videos land in READY with captions, visuals,
-   hook and the SAVR end card. Named from the hook.
-5. Post it, then drag it into POSTED.
+THE FLOW
+1. Claude plans the jams and writes plan.txt into DROP HERE: every jam, what's on
+   screen, the hook, and the stock footage to search for.
+2. Record. One voice memo for the whole session: say "jam 7", talk, "jam 8", talk.
+   For "screen" jams, screen record SAVR in jam order. For "headlines" jams,
+   screenshot the headlines in jam order.
+3. AirDrop everything straight into DROP HERE. No subfolders, no renaming. It gets
+   sorted by type, and matched to jams in the order you recorded or took it.
+4. Double-click Make Jam. Videos land in READY, plus a review sheet.
+5. Check the review sheet (or give it to Claude), post, drag the video to POSTED.
+
+RECORDING
+- Restart a sentence any time: pause, say it again from the start. The last
+  version is kept. "Prices are up thirty... Prices are up 33% since 2020."
+- Stumbled on a couple of words: pause, back up, say them again.
+- Ums, uhs and long pauses get cut. Normal breathing pauses stay.
+- Started down a totally different sentence and want it gone: say "again"
+  (pause before and after). That throws out everything since "jam 7" and starts
+  jam 7 over. Saying "jam 7" again does the same.
+
+IF SOMETHING GOES WRONG
+- A jam that fails doesn't stop the others. The review sheet says which failed.
+  Double-click Make Jam again and it redoes only those.
+- The review sheet lists what got cut from each jam. If a real line went missing,
+  tell Claude which one.
+
+PLAN.TXT LINES  (Claude writes these)
+07 | screen | Grocery prices are up 33% since 2020
+08 | broll | Points aren't saving you money | loyalty card checkout; receipt closeup
+09 | headlines2+screen | Every headline says prices went up
+screen = your next screen recording. headlines2 = your next 2 screenshots.
+broll = stock footage from the searches after the last |. Combine with +.
 
 FOLDERS YOU TOUCH
-DROP HERE    things going in
-READY        finished, not posted yet
+DROP HERE    everything going in
+READY        finished, not posted yet (plus the review sheet)
 POSTED       posted. Goes to the Trash by itself after 30 days.
 
 FOLDERS YOU DON'T NEED TO OPEN
-ORIGINALS    your raw voice memos and screen recordings. Kept forever.
-B-ROLL       your clips + free stock from Pixabay (B-ROLL/stock). Picked automatically.
+ORIGINALS    your raw voice memos, screen recordings and screenshots. Kept forever.
+B-ROLL       stock footage from Pixabay (B-ROLL/stock). Your own clips here are only
+             used if "use_own_broll": true is in .engine/jam_settings.json.
 FINISHED     working files. Go to the Trash by themselves after 30 days.
 
 OTHER BUTTONS
-Frame Videos   a screen recording in an iPhone, end card on the end. For editing by hand in CapCut.
+Frame Videos   a screen recording in an iPhone, end card on the end. For CapCut.
 Voice Only     puts your voice preset on audio you already edited in Descript.
 Voice Test     hear your voice in every preset.
 
-PLAN.TXT LINES
-07 | screen | Grocery prices are up 33% since 2020
-08 | broll  | Points aren't saving you money
-09 | headlines+screen | Every headline says prices went up
-broll = automatic. screen = your next screen recording. headlines = files in
-DROP HERE/visuals starting with the jam number ("09 a.png").
+FIRST TIME ON A NEW MAC
+1. Install ffmpeg: brew install ffmpeg   (needs Homebrew, brew.sh)
+2. Free Pixabay key (pixabay.com/api/docs, shown once you log in). Put it in
+   .engine/keys.json as {"pixabay_key": "your key"}. That file never goes to GitHub.
+3. Double-click Make Jam once while online. It sets itself up (a few minutes).

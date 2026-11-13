@@ -11,6 +11,7 @@ TOP = ENGINE.parent
 DROP = TOP / "DROP HERE"
 SCREEN_IN = DROP / "screen recordings"
 VOICE_IN = DROP / "voice memos"
+SHOTS_IN = DROP / "screenshots"   # headline screenshots, matched to jams in the order taken
 BACKGROUNDS = DROP / "backgrounds"
 
 FINISHED = TOP / "FINISHED"
